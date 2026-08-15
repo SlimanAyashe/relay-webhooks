@@ -12,6 +12,7 @@ dependencies = [
     "alembic>=1.13",
     "asyncpg>=0.30",
     "redis>=5.2",
+    "httpx>=0.27",
 ]
 
 [dependency-groups]
@@ -21,10 +22,12 @@ dev = [
     "pre-commit>=4.0",
     "pytest>=8.3",
     "pytest-asyncio>=0.24",
-    "httpx>=0.27",
+    "respx>=0.21",
+    "freezegun>=1.5",
     "testcontainers[postgres,redis]>=4.8",
     "import-linter>=2.1",
     "pip-audit>=2.7",
+    "polyfactory>=3.3.0",
 ]
 
 [build-system]
@@ -94,7 +97,7 @@ root_packages = ["relay"]
 name = "Layered architecture"
 type = "layers"
 layers = [
-    "relay.api",
+    "relay.api | relay.workers",
     "relay.services",
     "relay.repositories",
     "relay.infra",
@@ -102,5 +105,6 @@ layers = [
 
 [[tool.importlinter.contracts]]
 name = "Domain has zero internal dependencies"
-type = "independence"
-modules = ["relay.domain"]
+type = "forbidden"
+source_modules = ["relay.domain"]
+forbidden_modules = ["relay.api", "relay.workers", "relay.services", "relay.repositories", "relay.infra"]

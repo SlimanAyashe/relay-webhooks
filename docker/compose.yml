@@ -44,6 +44,106 @@ services:
       redis:
         condition: service_healthy
 
+  relay-worker:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    command: ["python", "-m", "relay.workers.relay"]
+    env_file:
+      - path: ../.env
+        required: false
+    environment:
+      DATABASE_URL: postgresql+asyncpg://relay:relay@postgres:5432/relay
+      REDIS_URL: redis://redis:6379/0
+    read_only: true
+    tmpfs:
+      - /tmp
+    # The image's baked-in HEALTHCHECK curls /healthz, which only the api service serves --
+    # workers don't listen on any port, so disable it rather than have Docker report them
+    # perpetually unhealthy.
+    healthcheck:
+      disable: true
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  dispatcher:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    command: ["python", "-m", "relay.workers.dispatcher"]
+    env_file:
+      - path: ../.env
+        required: false
+    environment:
+      DATABASE_URL: postgresql+asyncpg://relay:relay@postgres:5432/relay
+      REDIS_URL: redis://redis:6379/0
+    read_only: true
+    tmpfs:
+      - /tmp
+    # The image's baked-in HEALTHCHECK curls /healthz, which only the api service serves --
+    # workers don't listen on any port, so disable it rather than have Docker report them
+    # perpetually unhealthy.
+    healthcheck:
+      disable: true
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  scheduler:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    command: ["python", "-m", "relay.workers.scheduler"]
+    env_file:
+      - path: ../.env
+        required: false
+    environment:
+      DATABASE_URL: postgresql+asyncpg://relay:relay@postgres:5432/relay
+      REDIS_URL: redis://redis:6379/0
+    read_only: true
+    tmpfs:
+      - /tmp
+    # The image's baked-in HEALTHCHECK curls /healthz, which only the api service serves --
+    # workers don't listen on any port, so disable it rather than have Docker report them
+    # perpetually unhealthy.
+    healthcheck:
+      disable: true
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  reaper:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    command: ["python", "-m", "relay.workers.reaper"]
+    env_file:
+      - path: ../.env
+        required: false
+    environment:
+      DATABASE_URL: postgresql+asyncpg://relay:relay@postgres:5432/relay
+      REDIS_URL: redis://redis:6379/0
+    read_only: true
+    tmpfs:
+      - /tmp
+    # The image's baked-in HEALTHCHECK curls /healthz, which only the api service serves --
+    # workers don't listen on any port, so disable it rather than have Docker report them
+    # perpetually unhealthy.
+    healthcheck:
+      disable: true
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
   caddy:
     image: caddy:2-alpine
     volumes:

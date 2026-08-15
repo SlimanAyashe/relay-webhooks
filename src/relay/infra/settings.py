@@ -14,6 +14,15 @@ class Settings(BaseSettings):
 
     api_port: int = 8000
 
+    # Delivery engine worker tuning (Phase 2). Defaults favor a demo-friendly quick feedback
+    # loop over production throughput -- see docs/adr/0004-phase-2-delivery-engine.md.
+    outbox_poll_interval_seconds: float = 1.0
+    outbox_claim_batch_size: int = 50
+    dispatcher_concurrency: int = 10
+    scheduler_tick_interval_seconds: float = 1.0
+    reaper_tick_interval_seconds: float = 30.0
+    reaper_min_idle_ms: int = 30_000
+
 
 @lru_cache
 def get_settings() -> Settings:
