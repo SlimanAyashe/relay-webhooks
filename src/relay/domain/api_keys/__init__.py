@@ -2,3 +2,7 @@
 
 See relay.domain for layering rules.
 """
+
+from relay.domain.api_keys.entities import ApiKey
+
+__all__ = ["ApiKey"]
