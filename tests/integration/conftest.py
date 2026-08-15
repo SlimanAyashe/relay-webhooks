@@ -7,7 +7,7 @@ import pytest_asyncio
 from alembic import command
 from alembic.config import Config
 from redis.asyncio import Redis
-from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
+from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, create_async_engine
 from testcontainers.community.postgres import PostgresContainer
 from testcontainers.community.redis import RedisContainer
 
@@ -46,6 +46,19 @@ async def db_engine(postgres_url: str, _migrated_schema: None) -> AsyncIterator[
     engine = create_async_engine(postgres_url)
     yield engine
     await engine.dispose()
+
+
+@pytest_asyncio.fixture
+async def db_session(db_engine: AsyncEngine) -> AsyncIterator[AsyncSession]:
+    """A session bound to a single connection's transaction, always rolled back at
+    teardown — repository/service tests get a clean, isolated slate against the real,
+    already-migrated schema without recreating the container per test.
+    """
+    async with db_engine.connect() as conn:
+        await conn.begin()
+        async with AsyncSession(bind=conn, expire_on_commit=False) as session:
+            yield session
+        await conn.rollback()
 
 
 @pytest.fixture(scope="session")
