@@ -60,6 +60,17 @@ jobs:
           # on the ubuntu-latest runner), not service: containers.
           TESTCONTAINERS_RYUK_DISABLED: "true"
 
+  openapi-drift:
+    name: OpenAPI spec drift check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v4
+        with:
+          python-version: "3.12"
+      - run: uv sync --locked
+      - run: uv run python scripts/generate_openapi_spec.py --check
+
   migration-round-trip:
     name: alembic upgrade / downgrade round-trip
     runs-on: ubuntu-latest
@@ -104,7 +115,7 @@ jobs:
   build-and-push:
     name: build + push image to GHCR
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-    needs: [lint-typecheck, import-linter, pip-audit, test, migration-round-trip, docker-build]
+    needs: [lint-typecheck, import-linter, pip-audit, test, openapi-drift, migration-round-trip, docker-build]
     runs-on: ubuntu-latest
     permissions:
       contents: read

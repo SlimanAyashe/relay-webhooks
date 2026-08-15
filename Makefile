@@ -1,4 +1,4 @@
-.PHONY: up down logs migrate lint typecheck test build
+.PHONY: up down logs migrate lint typecheck test build openapi
 
 up:
 	docker compose -f docker/compose.yml up -d --build
@@ -24,3 +24,6 @@ test:
 
 build:
 	docker build -f docker/Dockerfile -t relay:latest .
+
+openapi:
+	uv run python scripts/generate_openapi_spec.py
