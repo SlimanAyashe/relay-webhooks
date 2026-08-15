@@ -10,6 +10,7 @@ from sqlalchemy.ext.asyncio import async_engine_from_config
 # before autogenerate runs.
 import relay.repositories.api_keys.models
 import relay.repositories.endpoints.models
+import relay.repositories.events.models
 import relay.repositories.tenants.models  # noqa: F401
 from relay.infra.settings import get_settings
 from relay.repositories.base import Base
