@@ -17,7 +17,12 @@ docker run --rm --env-file .env --network relay_default "$IMAGE" alembic upgrade
 
 PREVIOUS_IMAGE=$(docker inspect --format='{{.Config.Image}}' relay-api-1 2>/dev/null || echo "")
 
-RELAY_IMAGE="$IMAGE" docker compose -f docker/compose.prod.yml up -d api
+# --env-file is passed explicitly (not left to Compose's automatic
+# .env-in-cwd discovery) because that auto-discovery does not reliably find
+# ../.env's POSTGRES_PASSWORD here for variable interpolation in the compose
+# file itself (env_file: on the api service only injects vars into the
+# container, it doesn't feed ${...} interpolation in the YAML).
+RELAY_IMAGE="$IMAGE" docker compose --env-file .env -f docker/compose.prod.yml up -d api
 
 for _ in $(seq 1 20); do
     if curl -fs http://localhost:8000/readyz > /dev/null; then
@@ -29,7 +34,7 @@ done
 
 echo "ERROR: /readyz never went green after deploying $IMAGE; aborting swap." >&2
 if [ -n "$PREVIOUS_IMAGE" ]; then
-    RELAY_IMAGE="$PREVIOUS_IMAGE" docker compose -f docker/compose.prod.yml up -d api
+    RELAY_IMAGE="$PREVIOUS_IMAGE" docker compose --env-file .env -f docker/compose.prod.yml up -d api
     echo "Rolled back to $PREVIOUS_IMAGE; previous container left running." >&2
 fi
 exit 1
