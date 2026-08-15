@@ -41,6 +41,15 @@ async def _event_row_count(
         return result.scalar_one()
 
 
+async def _outbox_row_count(db_engine: AsyncEngine, event_id: uuid.UUID) -> int:
+    async with _sessionmaker(db_engine)() as session:
+        result = await session.execute(
+            text("SELECT COUNT(*) FROM outbox WHERE event_id = :event_id"),
+            {"event_id": str(event_id)},
+        )
+        return result.scalar_one()
+
+
 async def test_ingest_creates_new_event(db_engine: AsyncEngine) -> None:
     service, uow = _service(db_engine)
     tenant_id = await _make_tenant_id(uow)
@@ -49,6 +58,27 @@ async def test_ingest_creates_new_event(db_engine: AsyncEngine) -> None:
 
     assert event.type == "order.created"
     assert event.payload == {"order_id": "1"}
+
+
+async def test_ingest_writes_an_outbox_row_in_the_same_transaction(db_engine: AsyncEngine) -> None:
+    service, uow = _service(db_engine)
+    tenant_id = await _make_tenant_id(uow)
+
+    event = await service.ingest(tenant_id, "order.created", {"order_id": "1"}, "idem-1")
+
+    assert await _outbox_row_count(db_engine, event.id) == 1
+
+
+async def test_duplicate_key_identical_body_does_not_create_a_second_outbox_row(
+    db_engine: AsyncEngine,
+) -> None:
+    service, uow = _service(db_engine)
+    tenant_id = await _make_tenant_id(uow)
+    first = await service.ingest(tenant_id, "order.created", {"order_id": "1"}, "idem-1")
+
+    await service.ingest(tenant_id, "order.created", {"order_id": "1"}, "idem-1")
+
+    assert await _outbox_row_count(db_engine, first.id) == 1
 
 
 async def test_duplicate_key_identical_body_returns_original_no_new_row(

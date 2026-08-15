@@ -48,6 +48,10 @@ class EventIngestService:
                     payload=payload,
                     idempotency_key=idempotency_key,
                 )
+                # Same transaction as the event insert: a `202` is only ever returned
+                # after both rows are durably committed together, so the relay can never
+                # observe an event with no corresponding outbox entry to fan out.
+                await self._uow.outbox.create(event_id=event.id)
             except IdempotencyKeyConflict:
                 # Lost a race against a concurrent request using the same key -- the
                 # SAVEPOINT rollback inside EventRepository.create() left this

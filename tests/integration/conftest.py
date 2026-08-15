@@ -9,6 +9,7 @@ from alembic import command
 from alembic.config import Config
 from fastapi.testclient import TestClient
 from redis.asyncio import Redis
+from sqlalchemy import text
 from sqlalchemy.ext.asyncio import (
     AsyncEngine,
     AsyncSession,
@@ -19,6 +20,7 @@ from testcontainers.community.postgres import PostgresContainer
 from testcontainers.community.redis import RedisContainer
 
 from relay.infra.settings import get_settings
+from relay.infra.streams import DELIVERY_STREAM, DISPATCH_GROUP, ensure_consumer_group
 from relay.repositories.unit_of_work import UnitOfWork, get_unit_of_work
 from relay.services.api_keys.service import ApiKeyService
 
@@ -57,6 +59,28 @@ async def db_engine(postgres_url: str, _migrated_schema: None) -> AsyncIterator[
     await engine.dispose()
 
 
+@pytest_asyncio.fixture(autouse=True)
+async def _clean_globally_scoped_tables(
+    postgres_url: str, _migrated_schema: None
+) -> AsyncIterator[None]:
+    """`outbox.claim_due()` (and, transitively, the relay/dispatcher/reaper/scheduler
+    workers) query with no tenant filter -- correct production behavior, since the relay
+    has to see every tenant's pending work. But the Postgres container is session-scoped and
+    shared across every test file, and tests that commit real rows via UnitOfWork (rather
+    than the rollback-scoped db_session fixture, e.g. anything exercising
+    EventIngestService or a worker end to end) would otherwise leave permanent rows behind
+    that a later test's *unscoped* claim would see too. Truncate after every test so debris
+    from one test can never outlive it and leak into another's assertions.
+    """
+    yield
+    engine = create_async_engine(postgres_url)
+    try:
+        async with engine.begin() as conn:
+            await conn.execute(text("TRUNCATE outbox, deliveries, delivery_attempts CASCADE"))
+    finally:
+        await engine.dispose()
+
+
 @pytest_asyncio.fixture
 async def db_session(db_engine: AsyncEngine) -> AsyncIterator[AsyncSession]:
     """A session bound to a single connection's transaction, always rolled back at
@@ -83,6 +107,19 @@ async def redis_client(redis_url: str) -> AsyncIterator[Redis]:
     client = Redis.from_url(redis_url, decode_responses=True)
     yield client
     await client.aclose()
+
+
+@pytest_asyncio.fixture
+async def stream_redis(redis_client: Redis) -> AsyncIterator[Redis]:
+    """A Redis client with a clean keyspace and the delivery consumer group already created
+    -- for tests exercising real XADD/XREADGROUP/XACK/XAUTOCLAIM semantics, not a mocked
+    stream. Flushes before *and* after: the container (and its keyspace) is shared for the
+    whole test session, so leftover state from one test could otherwise leak into the next.
+    """
+    await redis_client.flushdb()
+    await ensure_consumer_group(redis_client, stream=DELIVERY_STREAM, group=DISPATCH_GROUP)
+    yield redis_client
+    await redis_client.flushdb()
 
 
 async def _setup_tenant_and_key(postgres_url: str, scopes: frozenset[str]) -> tuple[uuid.UUID, str]:

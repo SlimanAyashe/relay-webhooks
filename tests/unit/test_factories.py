@@ -1,8 +1,18 @@
 from relay.api.v1.endpoints.schemas import EndpointRead
 from relay.api.v1.events.schemas import EventRead
 from relay.api.v1.tenants.schemas import TenantRead
+from relay.domain.deliveries import DeliveryState
 from relay.domain.endpoints import BreakerState, EndpointStatus
-from tests.factories import ApiKeyFactory, EndpointFactory, EventFactory, TenantFactory
+from relay.domain.outbox import OutboxStatus
+from tests.factories import (
+    ApiKeyFactory,
+    DeliveryAttemptFactory,
+    DeliveryFactory,
+    EndpointFactory,
+    EventFactory,
+    OutboxEntryFactory,
+    TenantFactory,
+)
 
 
 def test_tenant_factory_builds_a_usable_entity() -> None:
@@ -42,3 +52,26 @@ def test_factories_build_distinct_entities_each_call() -> None:
     second = TenantFactory.build()
 
     assert first.id != second.id
+
+
+def test_outbox_entry_factory_builds_a_pending_unlocked_entry() -> None:
+    entry = OutboxEntryFactory.build()
+
+    assert entry.status is OutboxStatus.PENDING
+    assert entry.attempts == 0
+    assert entry.locked_at is None
+
+
+def test_delivery_factory_builds_a_fresh_pending_delivery() -> None:
+    delivery = DeliveryFactory.build()
+
+    assert delivery.state is DeliveryState.PENDING
+    assert delivery.attempt_count == 0
+    assert delivery.next_retry_at is None
+
+
+def test_delivery_attempt_factory_builds_a_successful_attempt() -> None:
+    attempt = DeliveryAttemptFactory.build()
+
+    assert attempt.response_status == 200
+    assert attempt.error_class is None

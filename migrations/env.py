@@ -9,8 +9,11 @@ from sqlalchemy.ext.asyncio import async_engine_from_config
 # Every ORM model module must be imported here so its table registers on Base.metadata
 # before autogenerate runs.
 import relay.repositories.api_keys.models
+import relay.repositories.deliveries.models
+import relay.repositories.delivery_attempts.models
 import relay.repositories.endpoints.models
 import relay.repositories.events.models
+import relay.repositories.outbox.models
 import relay.repositories.tenants.models  # noqa: F401
 from relay.infra.settings import get_settings
 from relay.repositories.base import Base

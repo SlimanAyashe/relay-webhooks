@@ -1,6 +1,6 @@
 import uuid
 
-from sqlalchemy import select, tuple_
+from sqlalchemy import any_, literal, select, tuple_
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from relay.domain.endpoints import BreakerState, Endpoint, EndpointStatus
@@ -74,6 +74,19 @@ class EndpointRepository:
             raise NotFoundError(f"endpoint not found: {endpoint_id}")
         await self._session.delete(model)
         await self._session.flush()
+
+    async def list_active_subscribed(self, tenant_id: uuid.UUID, event_type: str) -> list[Endpoint]:
+        """Active endpoints for `tenant_id` subscribed to `event_type` -- the fan-out target
+        set the relay worker uses to turn one event into one Delivery per endpoint.
+        """
+        result = await self._session.execute(
+            select(EndpointModel).where(
+                EndpointModel.tenant_id == tenant_id,
+                EndpointModel.status == EndpointStatus.ACTIVE.value,
+                literal(event_type) == any_(EndpointModel.subscribed_event_types),
+            )
+        )
+        return [_to_domain(model) for model in result.scalars()]
 
     async def list(
         self, tenant_id: uuid.UUID, *, cursor: str | None = None, limit: int = DEFAULT_PAGE_LIMIT

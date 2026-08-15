@@ -11,8 +11,11 @@ from datetime import UTC, datetime
 from polyfactory.factories import DataclassFactory
 
 from relay.domain.api_keys import ApiKey
+from relay.domain.deliveries import Delivery, DeliveryState
+from relay.domain.delivery_attempts import DeliveryAttempt
 from relay.domain.endpoints import BreakerState, Endpoint, EndpointStatus
 from relay.domain.events import Event
+from relay.domain.outbox import OutboxEntry, OutboxStatus
 from relay.domain.tenants import Tenant
 
 
@@ -119,3 +122,75 @@ class EventFactory(DataclassFactory[Event]):
     @classmethod
     def created_at(cls) -> datetime:
         return datetime.now(UTC)
+
+
+class OutboxEntryFactory(DataclassFactory[OutboxEntry]):
+    __model__ = OutboxEntry
+
+    @classmethod
+    def status(cls) -> OutboxStatus:
+        return OutboxStatus.PENDING
+
+    @classmethod
+    def attempts(cls) -> int:
+        return 0
+
+    @classmethod
+    def created_at(cls) -> datetime:
+        return datetime.now(UTC)
+
+    @classmethod
+    def locked_at(cls) -> None:
+        return None
+
+
+class DeliveryFactory(DataclassFactory[Delivery]):
+    __model__ = Delivery
+
+    @classmethod
+    def state(cls) -> DeliveryState:
+        return DeliveryState.PENDING
+
+    @classmethod
+    def attempt_count(cls) -> int:
+        return 0
+
+    @classmethod
+    def created_at(cls) -> datetime:
+        return datetime.now(UTC)
+
+    @classmethod
+    def next_retry_at(cls) -> None:
+        return None
+
+
+class DeliveryAttemptFactory(DataclassFactory[DeliveryAttempt]):
+    __model__ = DeliveryAttempt
+
+    @classmethod
+    def attempt_no(cls) -> int:
+        return 1
+
+    @classmethod
+    def latency_ms(cls) -> int:
+        return cls.__faker__.random_int(min=5, max=500)
+
+    @classmethod
+    def created_at(cls) -> datetime:
+        return datetime.now(UTC)
+
+    @classmethod
+    def response_status(cls) -> int:
+        return 200
+
+    @classmethod
+    def error_class(cls) -> None:
+        return None
+
+    @classmethod
+    def request_snippet(cls) -> None:
+        return None
+
+    @classmethod
+    def response_snippet(cls) -> None:
+        return None
