@@ -1,0 +1,35 @@
+name: Deploy
+
+# Triggered by pushing a version tag (v1.2.3). Requires these repo secrets,
+# none of which exist yet — see README "Known limitations":
+#   DEPLOY_SSH_KEY   private key for the deploy user on the VPS
+#   DEPLOY_HOST      VPS hostname/IP
+#   DEPLOY_USER      SSH user on the VPS
+on:
+  push:
+    tags:
+      - "v*.*.*"
+
+jobs:
+  deploy:
+    name: SSH deploy + migrate + health-gated swap
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure SSH
+        run: |
+          mkdir -p ~/.ssh
+          echo "${{ secrets.DEPLOY_SSH_KEY }}" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          ssh-keyscan -H "${{ secrets.DEPLOY_HOST }}" >> ~/.ssh/known_hosts
+
+      - name: Copy deploy script to VPS
+        run: |
+          scp -i ~/.ssh/deploy_key scripts/deploy_remote.sh \
+            "${{ secrets.DEPLOY_USER }}@${{ secrets.DEPLOY_HOST }}:/opt/relay/deploy_remote.sh"
+
+      - name: Run health-gated deploy
+        run: |
+          ssh -i ~/.ssh/deploy_key "${{ secrets.DEPLOY_USER }}@${{ secrets.DEPLOY_HOST }}" \
+            "chmod +x /opt/relay/deploy_remote.sh && cd /opt/relay && ./deploy_remote.sh ghcr.io/${{ github.repository }}:${{ github.sha }}"

@@ -1,0 +1,70 @@
+name: relay
+
+# Production overlay: api runs the pre-built GHCR image (set via $RELAY_IMAGE
+# by scripts/deploy_remote.sh) instead of building locally, and Caddy handles
+# real TLS on the real domain instead of local plain-HTTP proxying. Bring up
+# with: RELAY_IMAGE=ghcr.io/<owner>/<repo>:<sha> docker compose -f
+# docker/compose.prod.yml up -d
+#
+# NOT deployable yet — docker/Caddyfile.prod (the real-domain, real-TLS
+# config this file expects) doesn't exist until there's an actual domain to
+# put in it. See README "Known limitations" and backlog ticket p0-35.
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: relay
+      POSTGRES_PASSWORD: relay
+      POSTGRES_DB: relay
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U relay"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    restart: unless-stopped
+
+  redis:
+    image: redis:7-alpine
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    restart: unless-stopped
+
+  api:
+    image: ${RELAY_IMAGE:?RELAY_IMAGE must be set to a ghcr.io image ref}
+    env_file:
+      - path: ../.env
+        required: false
+    environment:
+      DATABASE_URL: postgresql+asyncpg://relay:relay@postgres:5432/relay
+      REDIS_URL: redis://redis:6379/0
+    read_only: true
+    tmpfs:
+      - /tmp
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+
+  caddy:
+    image: caddy:2-alpine
+    volumes:
+      - ./Caddyfile.prod:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+    ports:
+      - "80:80"
+      - "443:443"
+    depends_on:
+      - api
+    restart: unless-stopped
+
+volumes:
+  pgdata:
+  caddy_data:

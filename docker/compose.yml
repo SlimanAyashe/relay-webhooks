@@ -1,0 +1,57 @@
+name: relay
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: relay
+      POSTGRES_PASSWORD: relay
+      POSTGRES_DB: relay
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U relay"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  api:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    env_file:
+      - path: ../.env
+        required: false
+    environment:
+      DATABASE_URL: postgresql+asyncpg://relay:relay@postgres:5432/relay
+      REDIS_URL: redis://redis:6379/0
+    ports:
+      - "8000:8000"
+    read_only: true
+    tmpfs:
+      - /tmp
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  caddy:
+    image: caddy:2-alpine
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+    ports:
+      - "8080:80"
+    depends_on:
+      - api
+
+volumes:
+  pgdata:
