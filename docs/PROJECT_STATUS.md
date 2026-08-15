@@ -12,7 +12,7 @@ retry backoff, per-endpoint circuit breakers, and a replayable dead-letter queue
 guarantees, and the full build-phase breakdown live in the project plan (kept outside this repo —
 ask whoever's driving the project for it if you need the full spec beyond what's summarized here).
 
-## Current status: Phase 0 — skeleton, 40/41 tickets done
+## Current status: Phase 0 — skeleton, 41/41 tickets done. Live at https://relay.bookr.tech
 
 Phase 0's goal: an empty-but-real skeleton deployed to production before any feature work starts,
 so every later phase ships into a stack already proven to deploy.
@@ -57,11 +57,30 @@ so every later phase ships into a stack already proven to deploy.
   `POSTGRES_PASSWORD`, `chmod 600`, never committed) provisioned on the VPS — this is what
   `scripts/deploy_remote.sh` runs against.
 
-**Blocked — last one, needs a tag push:**
+**Shipped (2026-08-15):** first production deploy is live — `v0.1.5` is running at
+`https://relay.bookr.tech` / `https://api.relay.bookr.tech`, real Let's Encrypt TLS via the
+shared Traefik, `/readyz` green. Phase 0 is complete.
 
-| Ticket | Needs | Unblocks when |
-| --- | --- | --- |
-| Ship first production deploy | Everything above (now done) | Push a `vX.Y.Z` tag |
+It took a few tag pushes to get there (`v0.1.0`–`v0.1.5`); worth knowing for next time:
+- The VPS had never run `docker compose up` for this project before, so `deploy_remote.sh`'s
+  assumption that `relay_default`'s network/volumes already exist (it only ever does a
+  component *swap*, not a first bring-up) didn't hold on a truly first deploy. Bootstrapped
+  manually once: `RELAY_IMAGE=<any> docker compose --env-file .env -f docker/compose.prod.yml
+  up -d postgres redis` from `/opt/relay`. Also added the missing `DATABASE_URL` to
+  `/opt/relay/.env` — the standalone `docker run ... alembic upgrade head` step needs it and
+  isn't covered by the compose file's own interpolation.
+- `docker compose up` needs `--env-file .env` passed explicitly in `deploy_remote.sh` —
+  Compose's automatic `.env`-in-cwd discovery didn't reliably pick up `POSTGRES_PASSWORD` for
+  variable interpolation even with the right cwd (fixed in the script, see git history).
+- An annotated tag's `github.sha` in the `deploy.yml` trigger is the *commit* it points to, not
+  a separate tag-object SHA — so pushing a tag right after merging to `main` can race the
+  `ci.yml` build-and-push-to-GHCR run for that same commit. Wait for the `main`-push CI run to
+  finish (specifically "build + push image to GHCR") before tagging.
+- Cutting several tags in quick succession (a handful of new SSH connections from different
+  GitHub Actions runner IPs within ~15 minutes) tripped some network-level protection on the
+  VPS — one deploy attempt's SSH connection never reached `sshd` at all (no log entry, not an
+  auth failure). A ~2.5 minute pause before the next attempt cleared it. If deploys start
+  mysteriously timing out on the SSH step during a burst of retries, that's probably it.
 
 ## Known gotchas
 
