@@ -1,52 +1,15 @@
 import uuid
-from collections.abc import Iterator
+from collections.abc import Awaitable, Callable
 
-import pytest
 from fastapi.testclient import TestClient
-from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
-from relay.repositories.unit_of_work import UnitOfWork, get_unit_of_work
-from relay.services.api_keys.service import ApiKeyService
+AuthHeaders = Callable[[frozenset[str]], Awaitable[tuple[uuid.UUID, dict[str, str]]]]
 
 
-async def _setup_tenant_and_key(postgres_url: str, scopes: frozenset[str]) -> tuple[uuid.UUID, str]:
-    """Uses its own engine (built directly from postgres_url, not the shared db_engine
-    fixture) so its connections are bound to this async test's event loop, never the
-    TestClient portal's separate loop -- asyncpg connections can't cross loops.
-    """
-    engine = create_async_engine(postgres_url)
-    try:
-        uow = UnitOfWork(async_sessionmaker(engine, expire_on_commit=False))
-        async with uow:
-            tenant = await uow.tenants.create(name=f"acme-{uuid.uuid4()}")
-            await uow.commit()
-        _, plaintext_key = await ApiKeyService(uow).issue(tenant.id, scopes)
-        return tenant.id, plaintext_key
-    finally:
-        await engine.dispose()
-
-
-async def _auth_headers(
-    postgres_url: str, scopes: frozenset[str]
-) -> tuple[uuid.UUID, dict[str, str]]:
-    tenant_id, plaintext_key = await _setup_tenant_and_key(postgres_url, scopes)
-    return tenant_id, {"X-API-Key": plaintext_key}
-
-
-@pytest.fixture
-def wired_client(client: TestClient, postgres_url: str) -> Iterator[TestClient]:
-    """Its own engine too, for the same cross-loop reason -- this one is only ever used
-    from inside the TestClient portal thread's loop, since dependency_overrides only
-    calls the lambda while FastAPI is resolving a request.
-    """
-    sessionmaker = async_sessionmaker(create_async_engine(postgres_url), expire_on_commit=False)
-    client.app.dependency_overrides[get_unit_of_work] = lambda: UnitOfWork(sessionmaker)  # type: ignore[attr-defined]
-    yield client
-    client.app.dependency_overrides.clear()  # type: ignore[attr-defined]
-
-
-async def test_create_get_list_endpoint(wired_client: TestClient, postgres_url: str) -> None:
-    _, headers = await _auth_headers(postgres_url, frozenset({"*"}))
+async def test_create_get_list_endpoint(
+    wired_client: TestClient, auth_headers: AuthHeaders
+) -> None:
+    _, headers = await auth_headers(frozenset({"*"}))
 
     create_response = wired_client.post(
         "/v1/endpoints",
@@ -72,9 +35,9 @@ async def test_create_get_list_endpoint(wired_client: TestClient, postgres_url: 
 
 
 async def test_create_endpoint_rejects_non_https_url(
-    wired_client: TestClient, postgres_url: str
+    wired_client: TestClient, auth_headers: AuthHeaders
 ) -> None:
-    _, headers = await _auth_headers(postgres_url, frozenset({"*"}))
+    _, headers = await auth_headers(frozenset({"*"}))
 
     response = wired_client.post(
         "/v1/endpoints",
@@ -90,8 +53,8 @@ def test_missing_api_key_returns_401(wired_client: TestClient) -> None:
     assert response.status_code == 401
 
 
-async def test_wrong_scope_returns_403(wired_client: TestClient, postgres_url: str) -> None:
-    _, headers = await _auth_headers(postgres_url, frozenset({"events:read"}))
+async def test_wrong_scope_returns_403(wired_client: TestClient, auth_headers: AuthHeaders) -> None:
+    _, headers = await auth_headers(frozenset({"events:read"}))
 
     response = wired_client.get("/v1/endpoints", headers=headers)
 
@@ -99,18 +62,20 @@ async def test_wrong_scope_returns_403(wired_client: TestClient, postgres_url: s
 
 
 async def test_get_missing_endpoint_returns_404(
-    wired_client: TestClient, postgres_url: str
+    wired_client: TestClient, auth_headers: AuthHeaders
 ) -> None:
-    _, headers = await _auth_headers(postgres_url, frozenset({"*"}))
+    _, headers = await auth_headers(frozenset({"*"}))
 
     response = wired_client.get(f"/v1/endpoints/{uuid.uuid4()}", headers=headers)
 
     assert response.status_code == 404
 
 
-async def test_cross_tenant_get_returns_404(wired_client: TestClient, postgres_url: str) -> None:
-    _, owner_headers = await _auth_headers(postgres_url, frozenset({"*"}))
-    _, other_headers = await _auth_headers(postgres_url, frozenset({"*"}))
+async def test_cross_tenant_get_returns_404(
+    wired_client: TestClient, auth_headers: AuthHeaders
+) -> None:
+    _, owner_headers = await auth_headers(frozenset({"*"}))
+    _, other_headers = await auth_headers(frozenset({"*"}))
     create_response = wired_client.post(
         "/v1/endpoints",
         json={"url": "https://example.com/hook", "subscribed_event_types": ["x"]},
@@ -123,8 +88,10 @@ async def test_cross_tenant_get_returns_404(wired_client: TestClient, postgres_u
     assert response.status_code == 404
 
 
-async def test_update_and_delete_endpoint(wired_client: TestClient, postgres_url: str) -> None:
-    _, headers = await _auth_headers(postgres_url, frozenset({"*"}))
+async def test_update_and_delete_endpoint(
+    wired_client: TestClient, auth_headers: AuthHeaders
+) -> None:
+    _, headers = await auth_headers(frozenset({"*"}))
     create_response = wired_client.post(
         "/v1/endpoints",
         json={"url": "https://example.com/hook", "subscribed_event_types": ["x"]},
@@ -146,9 +113,9 @@ async def test_update_and_delete_endpoint(wired_client: TestClient, postgres_url
 
 
 async def test_list_endpoints_paginates_with_no_skips_or_duplicates(
-    wired_client: TestClient, postgres_url: str
+    wired_client: TestClient, auth_headers: AuthHeaders
 ) -> None:
-    _, headers = await _auth_headers(postgres_url, frozenset({"*"}))
+    _, headers = await auth_headers(frozenset({"*"}))
     created_ids = set()
     for i in range(5):
         response = wired_client.post(
@@ -177,9 +144,9 @@ async def test_list_endpoints_paginates_with_no_skips_or_duplicates(
 
 
 async def test_list_endpoints_rejects_invalid_cursor(
-    wired_client: TestClient, postgres_url: str
+    wired_client: TestClient, auth_headers: AuthHeaders
 ) -> None:
-    _, headers = await _auth_headers(postgres_url, frozenset({"*"}))
+    _, headers = await auth_headers(frozenset({"*"}))
 
     response = wired_client.get(
         "/v1/endpoints", params={"cursor": "not-a-valid-cursor"}, headers=headers

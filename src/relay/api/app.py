@@ -2,6 +2,7 @@ from fastapi import FastAPI
 
 from relay.api.health import router as health_router
 from relay.api.v1.endpoints.router import router as endpoints_router
+from relay.api.v1.events.router import router as events_router
 from relay.infra.settings import get_settings
 
 
@@ -11,6 +12,7 @@ def create_app() -> FastAPI:
     app.state.settings = settings
     app.include_router(health_router)
     app.include_router(endpoints_router)
+    app.include_router(events_router)
     return app
 
 
