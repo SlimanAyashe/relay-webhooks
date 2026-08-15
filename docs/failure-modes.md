@@ -1,0 +1,18 @@
+# Failure modes
+
+The running "if it dies/misbehaves here, then what — and which test proves it" reference,
+kept as one row per phase per the project plan's comprehension-forcing function. This is meant
+to be readable standalone: pick a row, and the test it names can be run directly to watch the
+claimed behavior happen.
+
+| Failure point | Expected behavior | Proof |
+| --- | --- | --- |
+| Duplicate `POST /v1/events` with the same `Idempotency-Key` and an identical body | The original event is returned unchanged (same id, same `202`); no second row is inserted | `tests/integration/test_event_ingest_service.py::test_duplicate_key_identical_body_returns_original_no_new_row` (asserts a raw `COUNT(*)` of 1), `tests/integration/test_events_router.py::test_ingest_duplicate_key_identical_body_returns_same_event` |
+| Duplicate `POST /v1/events` with the same `Idempotency-Key` but a differing body | `409 Conflict`, via the shared `application/problem+json` envelope | `tests/integration/test_event_ingest_service.py::test_duplicate_key_differing_body_raises_conflict_no_new_row`, `tests/integration/test_error_handling.py::test_409_conflict_response_matches_rfc9457_shape` |
+| Two requests race to insert the same `(tenant_id, Idempotency-Key)` at the same instant | The DB's `UNIQUE` constraint lets exactly one `INSERT` win; the loser's repository call raises `IdempotencyKeyConflict`, caught inside a `SAVEPOINT` so the surrounding transaction stays usable, and resolved the same identical-body-vs-differing-body way as an ordinary duplicate | `tests/integration/test_event_repository.py::test_duplicate_idempotency_key_raises_typed_conflict` (also proves the session survives the conflict) |
+| Revoked API key presented on any `/v1/*` request | `401`, before any route handler code runs | `tests/integration/test_auth.py::test_authenticate_rejects_revoked_key`, `tests/integration/test_tenant_isolation.py::test_revoked_api_key_returns_401` |
+| Malformed, unknown-prefix, or missing API key presented | `401` — the same generic detail as a revoked key, so a response can't be used to distinguish "doesn't exist" from "exists but revoked" | `tests/integration/test_auth.py::test_authenticate_rejects_malformed_key`/`test_authenticate_rejects_unknown_prefix`, `tests/integration/test_tenant_isolation.py::test_malformed_api_key_returns_401`/`test_unknown_api_key_returns_401`/`test_missing_api_key_returns_401` |
+| Valid API key from tenant A used against tenant B's endpoint (`GET`/`PATCH`/`DELETE`) | `404`, not `403` — tenant A's key can't distinguish "doesn't exist" from "belongs to someone else," so existence is never leaked across tenants | `tests/integration/test_tenant_isolation.py::test_tenant_a_key_cannot_read_or_modify_tenant_b_endpoint` |
+| Valid API key lacking the scope a request needs | `403 Forbidden` | `tests/integration/test_auth.py::test_require_scope_rejects_key_without_scope`, `tests/integration/test_endpoints_router.py::test_wrong_scope_returns_403` |
+| Client-supplied cursor on `GET /v1/endpoints` is malformed or forged | `422`, not a 500 or a silently-wrong page | `tests/unit/test_pagination.py::test_decode_cursor_rejects_garbage_input`, `tests/integration/test_endpoints_router.py::test_list_endpoints_rejects_invalid_cursor` |
+| An unexpected/unhandled exception occurs anywhere in a request | `500` with a bare, generic problem+json body and a `trace_id` a caller can quote back — never a stack trace or exception message on the wire; full context is logged server-side instead | `tests/unit/test_errors.py::test_domain_error_handler_maps_unmapped_subclass_to_500` |
