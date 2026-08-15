@@ -102,5 +102,6 @@ layers = [
 
 [[tool.importlinter.contracts]]
 name = "Domain has zero internal dependencies"
-type = "independence"
-modules = ["relay.domain"]
+type = "forbidden"
+source_modules = ["relay.domain"]
+forbidden_modules = ["relay.api", "relay.services", "relay.repositories", "relay.infra"]
