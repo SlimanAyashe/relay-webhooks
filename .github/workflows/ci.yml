@@ -117,11 +117,17 @@ jobs:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
+      # GHCR requires a lowercase repository path; github.repository preserves
+      # whatever case the GitHub org/repo names actually use, so it can't be
+      # interpolated into the tag directly (Actions expressions have no
+      # toLower()) — normalize it once here instead.
+      - name: Set lowercase image repository
+        run: echo "IMAGE_REPO=$(echo '${{ github.repository }}' | tr '[:upper:]' '[:lower:]')" >> "$GITHUB_ENV"
       - uses: docker/build-push-action@v6
         with:
           context: .
           file: docker/Dockerfile
           push: true
           tags: |
-            ghcr.io/${{ github.repository }}:${{ github.sha }}
-            ghcr.io/${{ github.repository }}:latest
+            ghcr.io/${{ env.IMAGE_REPO }}:${{ github.sha }}
+            ghcr.io/${{ env.IMAGE_REPO }}:latest

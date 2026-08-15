@@ -17,6 +17,11 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # GHCR requires a lowercase repository path — see the matching comment
+      # in ci.yml's build-and-push job for why this can't be inlined below.
+      - name: Set lowercase image repository
+        run: echo "IMAGE_REPO=$(echo '${{ github.repository }}' | tr '[:upper:]' '[:lower:]')" >> "$GITHUB_ENV"
+
       - name: Configure SSH
         run: |
           mkdir -p ~/.ssh
@@ -32,4 +37,4 @@ jobs:
       - name: Run health-gated deploy
         run: |
           ssh -i ~/.ssh/deploy_key "${{ secrets.DEPLOY_USER }}@${{ secrets.DEPLOY_HOST }}" \
-            "chmod +x /opt/relay/deploy_remote.sh && cd /opt/relay && ./deploy_remote.sh ghcr.io/${{ github.repository }}:${{ github.sha }}"
+            "chmod +x /opt/relay/deploy_remote.sh && cd /opt/relay && ./deploy_remote.sh ghcr.io/${{ env.IMAGE_REPO }}:${{ github.sha }}"
