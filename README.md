@@ -18,8 +18,10 @@ now, since there's no business logic yet to justify a `services`/`repositories` 
 in CI so the boundary can't erode once real logic lands. `/healthz` is a liveness check with no
 dependencies; `/readyz` checks Postgres and Redis independently and returns a per-dependency
 breakdown, which is what the deploy pipeline polls after every swap. Locally, Caddy reverse-proxies
-to the API over plain HTTP (`docker/compose.yml`); in production it does the same over the real
-domain with automatic TLS (`docker/Caddyfile`, once deployed — see Known limitations).
+to the API over plain HTTP (`docker/compose.yml`). In production, TLS and routing are handled by a
+Traefik instance already running on the deploy VPS (shared with other services on that box) via
+Docker labels on the `api` container — see `docs/adr/0002-shared-vps-traefik.md` for why that
+differs from the local setup.
 
 ## Local setup
 
@@ -67,5 +69,5 @@ Final image size: **315MB** (`python:3.12-slim` base).
   deploys; see [RELAY-PLAN.md](../RELAY-PLAN.md) for what's next.
 - CI workflow (`.github/workflows/ci.yml`) is written and locally validated but has not yet run
   against a live GitHub Actions runner — that requires pushing this repo to GitHub.
-- No production deploy yet: that requires a VPS, a domain, and GitHub Actions deploy secrets,
-  none of which exist yet for this project.
+- Production deploy is tag-triggered (`vX.Y.Z`) and not yet exercised end-to-end — see
+  `docs/PROJECT_STATUS.md` for current status.
