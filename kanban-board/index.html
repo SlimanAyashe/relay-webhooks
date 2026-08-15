@@ -1,0 +1,1033 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Kanban</title>
+<style>
+  :root {
+    --bg: #f4f5f7;
+    --board-bg: #f4f5f7;
+    --col-bg: #ebecf0;
+    --col-header: #44546f;
+    --card-bg: #ffffff;
+    --card-shadow: 0 1px 2px rgba(9, 30, 66, 0.25);
+    --card-shadow-hover: 0 4px 10px rgba(9, 30, 66, 0.2);
+    --text: #172b4d;
+    --text-muted: #6b778c;
+    --accent: #0052cc;
+    --danger: #de350b;
+    --border: #dfe1e6;
+    --low: #36b37e;
+    --medium: #ffab00;
+    --high: #de350b;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #1d2125;
+      --board-bg: #1d2125;
+      --col-bg: #282e33;
+      --col-header: #b6c2cf;
+      --card-bg: #22272b;
+      --card-shadow: 0 1px 2px rgba(0,0,0,0.4);
+      --card-shadow-hover: 0 4px 10px rgba(0,0,0,0.45);
+      --text: #b6c2cf;
+      --text-muted: #8c9bab;
+      --accent: #579dff;
+      --danger: #f87168;
+      --border: #3c4148;
+      --low: #4bce97;
+      --medium: #f5cd47;
+      --high: #f87168;
+    }
+  }
+
+  * { box-sizing: border-box; }
+  html, body { height: 100%; }
+  body {
+    margin: 0;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    display: flex;
+    flex-direction: column;
+    height: 100vh;
+    overflow: hidden;
+  }
+
+  header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 14px 20px;
+    border-bottom: 1px solid var(--border);
+    flex-shrink: 0;
+  }
+  header h1 {
+    font-size: 18px;
+    margin: 0;
+    font-weight: 600;
+  }
+  header .sub {
+    font-size: 12px;
+    color: var(--text-muted);
+    margin-top: 2px;
+  }
+  .header-actions { display: flex; gap: 8px; }
+
+  button {
+    font-family: inherit;
+    cursor: pointer;
+  }
+  .btn {
+    background: transparent;
+    border: 1px solid var(--border);
+    color: var(--text);
+    padding: 6px 12px;
+    border-radius: 4px;
+    font-size: 13px;
+  }
+  .btn:hover { background: var(--col-bg); }
+  .btn-primary {
+    background: var(--accent);
+    border-color: var(--accent);
+    color: #fff;
+  }
+  .btn-primary:hover { filter: brightness(1.08); }
+
+  .app-body {
+    flex: 1;
+    display: flex;
+    min-height: 0;
+  }
+
+  .sidebar {
+    width: 180px;
+    flex-shrink: 0;
+    border-right: 1px solid var(--border);
+    padding: 14px 8px;
+  }
+  .nav-item {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    width: 100%;
+    text-align: left;
+    padding: 8px 10px;
+    border-radius: 6px;
+    background: none;
+    border: none;
+    color: var(--text);
+    font-size: 13px;
+    margin-bottom: 2px;
+  }
+  .nav-item:hover { background: var(--col-bg); }
+  .nav-item.active { background: var(--col-bg); font-weight: 600; }
+  .nav-icon { font-size: 14px; }
+  .nav-badge {
+    margin-left: auto;
+    font-size: 11px;
+    color: var(--text-muted);
+    background: rgba(120,120,120,0.18);
+    padding: 1px 7px;
+    border-radius: 10px;
+  }
+
+  .content {
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+  }
+
+  #board-view {
+    display: flex;
+    gap: 12px;
+    padding: 16px 20px;
+    overflow-x: auto;
+    overflow-y: hidden;
+    align-items: flex-start;
+    flex: 1;
+    background: var(--board-bg);
+  }
+  #board-view.hidden { display: none; }
+
+  #backlog-view {
+    flex: 1;
+    overflow-y: auto;
+    padding: 20px;
+  }
+  #backlog-view.hidden { display: none; }
+  .backlog-header h2 { margin: 0 0 2px; font-size: 16px; }
+  .backlog-header .sub { font-size: 12px; color: var(--text-muted); margin-bottom: 14px; }
+  .backlog-list { max-width: 640px; }
+  .backlog-empty { color: var(--text-muted); font-size: 13px; padding: 10px 0 20px; }
+
+  .column {
+    background: var(--col-bg);
+    border-radius: 8px;
+    width: 272px;
+    min-width: 272px;
+    display: flex;
+    flex-direction: column;
+    max-height: 100%;
+  }
+
+  .column-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 10px 10px 6px 12px;
+  }
+  .column-title {
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--col-header);
+    background: transparent;
+    border: none;
+    outline: none;
+    width: 100%;
+    padding: 2px 4px;
+    border-radius: 3px;
+  }
+  .column-title:hover, .column-title:focus { background: rgba(9,30,66,0.06); }
+  .count {
+    font-size: 12px;
+    color: var(--text-muted);
+    margin-left: 6px;
+  }
+  .col-delete {
+    background: none;
+    border: none;
+    color: var(--text-muted);
+    font-size: 15px;
+    padding: 2px 6px;
+    border-radius: 3px;
+  }
+  .col-delete:hover { background: rgba(9,30,66,0.08); color: var(--danger); }
+
+  .task-list {
+    flex: 1;
+    overflow-y: auto;
+    padding: 2px 8px;
+    min-height: 20px;
+  }
+
+  .card {
+    background: var(--card-bg);
+    border-radius: 6px;
+    box-shadow: var(--card-shadow);
+    padding: 8px 10px;
+    margin-bottom: 8px;
+    cursor: grab;
+    position: relative;
+    border-left: 3px solid transparent;
+  }
+  .card:hover { box-shadow: var(--card-shadow-hover); }
+  .card.dragging { opacity: 0.4; }
+  .card.priority-low { border-left-color: var(--low); }
+  .card.priority-medium { border-left-color: var(--medium); }
+  .card.priority-high { border-left-color: var(--high); }
+
+  .card-title {
+    font-size: 14px;
+    line-height: 1.3;
+    white-space: pre-wrap;
+    word-break: break-word;
+  }
+  .card-desc {
+    font-size: 12px;
+    color: var(--text-muted);
+    margin-top: 4px;
+    white-space: pre-wrap;
+    word-break: break-word;
+  }
+  .card-remove {
+    position: absolute;
+    top: 4px;
+    right: 4px;
+    display: none;
+    background: none;
+    border: none;
+    color: var(--text-muted);
+    font-size: 14px;
+    padding: 2px 5px;
+    border-radius: 3px;
+  }
+  .card:hover .card-remove { display: block; }
+  .card-remove:hover { background: rgba(9,30,66,0.08); color: var(--danger); }
+
+  .backlog-card { padding-right: 26px; }
+  .backlog-actions {
+    display: flex;
+    justify-content: flex-end;
+    margin-top: 8px;
+  }
+  .to-todo-btn {
+    font-size: 12px;
+    padding: 4px 10px;
+    border-radius: 4px;
+    background: var(--accent);
+    color: #fff;
+    border: none;
+  }
+  .to-todo-btn:hover { filter: brightness(1.08); }
+
+  .drop-placeholder {
+    height: 44px;
+    border: 2px dashed var(--accent);
+    border-radius: 6px;
+    margin-bottom: 8px;
+    opacity: 0.5;
+  }
+
+  .add-task-btn {
+    display: block;
+    width: calc(100% - 16px);
+    margin: 4px 8px 10px;
+    text-align: left;
+    background: none;
+    border: none;
+    color: var(--text-muted);
+    font-size: 13px;
+    padding: 6px 8px;
+    border-radius: 4px;
+  }
+  .add-task-btn:hover { background: rgba(9,30,66,0.08); color: var(--text); }
+  #backlog-add-btn { width: auto; margin: 0 0 14px; padding: 6px 10px; border: 1px dashed var(--border); }
+
+  .add-form {
+    margin: 4px 8px 10px;
+    background: var(--card-bg);
+    border-radius: 6px;
+    padding: 8px;
+    box-shadow: var(--card-shadow);
+  }
+  #backlog-view .add-form { margin: 0 0 14px; max-width: 640px; }
+  .add-form textarea, .add-form input[type="text"] {
+    width: 100%;
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    background: var(--bg);
+    color: var(--text);
+    font-family: inherit;
+    font-size: 13px;
+    padding: 6px 8px;
+    resize: vertical;
+    margin-bottom: 6px;
+  }
+  .add-form select {
+    font-family: inherit;
+    font-size: 12px;
+    padding: 4px 6px;
+    border-radius: 4px;
+    border: 1px solid var(--border);
+    background: var(--bg);
+    color: var(--text);
+    margin-bottom: 8px;
+  }
+  .add-form .row { display: flex; gap: 8px; align-items: center; }
+  .form-actions { display: flex; gap: 8px; }
+
+  .new-column {
+    width: 272px;
+    min-width: 272px;
+  }
+  .new-column-btn {
+    width: 100%;
+    background: rgba(255,255,255,0.08);
+    border: 1px dashed var(--border);
+    color: var(--text-muted);
+    padding: 10px;
+    border-radius: 8px;
+    font-size: 13px;
+    text-align: left;
+  }
+  .new-column-btn:hover { background: var(--col-bg); color: var(--text); }
+
+  #import-input { display: none; }
+  .live-badge {
+    font-size: 11px;
+    color: var(--text-muted);
+    margin-top: 2px;
+  }
+</style>
+</head>
+<body>
+
+<script type="application/json" id="board-seed">
+{"rev":134,"columns":["col-todo","col-doing","col-done","col-blocked"],"columnData":{"col-todo":{"title":"To Do","taskIds":[]},"col-doing":{"title":"In Progress","taskIds":[]},"col-done":{"title":"Done","taskIds":["task-p0-01","task-p0-02","task-p0-03","task-p0-04","task-p0-06","task-p0-05","task-p0-39","task-p0-07","task-p0-08","task-p0-09","task-p0-10","task-p0-11","task-p0-12","task-p0-13","task-p0-14","task-p0-15","task-p0-16","task-p0-17","task-p0-18","task-p0-19","task-p0-20","task-p0-21","task-p0-22","task-p0-23","task-p0-24","task-p0-25","task-p0-26","task-p0-27","task-p0-28","task-p0-29","task-p0-30","task-p0-40","task-p0-41","task-p0-32","task-p0-36","task-p0-37","task-p0-31","task-p0-33","task-p0-34","task-p0-35","task-p0-38","task-p1-01","task-p1-02","task-p1-03","task-p1-04","task-p1-05"]},"col-blocked":{"title":"Blocked","taskIds":[]}},"tasks":{"task-p0-01":{"id":"task-p0-01","title":"Scaffold repo directory structure","description":"Create the full skeleton \u2014 src/relay/{api,domain,services,repositories,workers,infra,web}, migrations/, tests/{unit,integration,e2e,load}, docs/adr/, docker/, .github/workflows/ \u2014 with __init__.py placeholders so the layout is fixed before any code lands.","priority":"high","createdAt":1},"task-p0-02":{"id":"task-p0-02","title":"Init uv project, pin Python 3.12, lockfile","description":"pyproject.toml with Python 3.12 pin and core deps (fastapi, uvicorn, sqlalchemy, alembic, redis) declared; `uv lock` produces a committed lockfile so builds are reproducible.","priority":"high","createdAt":2},"task-p0-03":{"id":"task-p0-03","title":"Configure ruff lint + format baseline","description":"ruff config in pyproject.toml (lint + format rules chosen); `uv run ruff check .` and `ruff format --check .` both pass clean on the empty skeleton.","priority":"high","createdAt":3},"task-p0-04":{"id":"task-p0-04","title":"Configure mypy strict baseline","description":"mypy config targeting src/relay with strict-ish settings enabled; `uv run mypy src` passes clean on the skeleton with zero suppressions.","priority":"high","createdAt":4},"task-p0-05":{"id":"task-p0-05","title":"Set up pre-commit hooks for ruff/mypy","description":".pre-commit-config.yaml wires ruff, ruff-format, and mypy as local hooks; `pre-commit run --all-files` passes and hooks are documented as required in README.","priority":"medium","createdAt":5},"task-p0-06":{"id":"task-p0-06","title":"Add .gitignore and .dockerignore","description":".gitignore covers Python/uv/venv/IDE artifacts; .dockerignore excludes tests, .git, docs, and dev tooling from the build context so image builds stay small and fast.","priority":"medium","createdAt":6},"task-p0-07":{"id":"task-p0-07","title":"Bootstrap FastAPI app entrypoint","description":"src/relay/api exposes an ASGI app factory (create_app), runnable via uvicorn locally with an empty router \u2014 no business endpoints yet, just a booting app.","priority":"high","createdAt":7},"task-p0-08":{"id":"task-p0-08","title":"Add pydantic-settings config module","description":"src/relay/infra config module loads all runtime settings (DB URL, Redis URL, ports, log level) from env vars via pydantic-settings, with a typed Settings object injected into the app.","priority":"medium","createdAt":8},"task-p0-09":{"id":"task-p0-09","title":"Write .env.example with all variables documented","description":"Every env var consumed by Settings is listed with a comment explaining purpose and a safe example value; no real secrets present; referenced from README.","priority":"medium","createdAt":9},"task-p0-10":{"id":"task-p0-10","title":"Configure pytest + FastAPI TestClient fixtures","description":"pytest config plus conftest.py providing an app/TestClient fixture, so tests/unit and tests/integration can both import and exercise the app.","priority":"medium","createdAt":10},"task-p0-11":{"id":"task-p0-11","title":"Implement /healthz liveness endpoint","description":"GET /healthz returns 200 with no dependency checks (process-alive only); unit test asserts 200 and expected payload shape.","priority":"medium","createdAt":11},"task-p0-12":{"id":"task-p0-12","title":"Add SQLAlchemy async engine/session setup","description":"src/relay/infra defines an async engine/session factory built from Settings' DB URL, with a FastAPI dependency for a request-scoped session \u2014 no models yet.","priority":"medium","createdAt":12},"task-p0-13":{"id":"task-p0-13","title":"Wire Alembic migrations (env.py, initial revision)","description":"alembic init under migrations/, env.py reads DB URL from Settings (not hardcoded), and an initial empty revision runs `alembic upgrade head` successfully against local Postgres.","priority":"high","createdAt":13},"task-p0-14":{"id":"task-p0-14","title":"Provision test DB via Alembic, not create_all","description":"Integration test fixture spins up/points at a test database and applies schema exclusively via `alembic upgrade head`; confirm zero calls to Base.metadata.create_all anywhere in the repo.","priority":"high","createdAt":14},"task-p0-15":{"id":"task-p0-15","title":"Add Redis client wiring in infra layer","description":"src/relay/infra defines a Redis client/connection factory built from Settings' Redis URL, exposed as a FastAPI dependency \u2014 no stream logic yet, just connectivity.","priority":"medium","createdAt":15},"task-p0-16":{"id":"task-p0-16","title":"Implement /readyz checking Postgres + Redis","description":"GET /readyz performs a real query against Postgres and a real ping against Redis, returning 200 only if both succeed and 503 with a per-dependency breakdown otherwise; tests cover both healthy and simulated-failure cases.","priority":"medium","createdAt":16},"task-p0-17":{"id":"task-p0-17","title":"Write multi-stage Dockerfile (builder + runtime)","description":"Builder stage installs deps via uv into a venv/wheel; runtime stage is slim, copies only the built artifact, and dependency layers are ordered so code changes don't invalidate the dep cache.","priority":"high","createdAt":17},"task-p0-18":{"id":"task-p0-18","title":"Harden Dockerfile: non-root, read-only, pinned digest","description":"Runtime stage runs as a non-root user, sets a read-only root filesystem (with explicit writable tmpfs where needed), pins the base image by digest, and adds a HEALTHCHECK hitting /healthz.","priority":"medium","createdAt":18},"task-p0-19":{"id":"task-p0-19","title":"Build image locally, record size in README","description":"`docker build` succeeds, final image size is captured and added to README alongside the build command, giving a baseline to track regressions against.","priority":"low","createdAt":19},"task-p0-20":{"id":"task-p0-20","title":"Write docker-compose.yml (api, postgres, redis)","description":"Compose file brings up api + postgres + redis with named volumes for Postgres data, env vars sourced from .env, and api depends_on healthy postgres/redis.","priority":"high","createdAt":20},"task-p0-21":{"id":"task-p0-21","title":"Add Caddy service to compose for local proxying","description":"Caddy service added to compose with a local Caddyfile reverse-proxying to the api container over plain HTTP for local dev (no TLS requirement yet).","priority":"medium","createdAt":21},"task-p0-22":{"id":"task-p0-22","title":"Verify local stack boots, /readyz goes green","description":"`docker compose up` brings the full stack up from a clean state and curl against /readyz through Caddy returns 200, confirming api, Postgres, and Redis are correctly wired end to end.","priority":"high","createdAt":22},"task-p0-23":{"id":"task-p0-23","title":"Write Makefile for common dev commands","description":"Makefile exposes targets for lint, typecheck, test, up/down, migrate, and build so all dev workflows are one command; referenced from README as the canonical entrypoint.","priority":"medium","createdAt":23},"task-p0-24":{"id":"task-p0-24","title":"CI job: ruff + mypy on every PR","description":"GitHub Actions workflow triggered on PR runs ruff check, ruff format --check, and mypy src, failing the check on any violation.","priority":"high","createdAt":24},"task-p0-25":{"id":"task-p0-25","title":"CI job: pytest unit + integration suite","description":"CI job spins up Postgres/Redis service containers and runs pytest tests/unit tests/integration, failing the PR check on any test failure.","priority":"medium","createdAt":25},"task-p0-26":{"id":"task-p0-26","title":"CI job: Alembic upgrade/downgrade round-trip","description":"CI job runs alembic upgrade head, downgrade -1, upgrade head against a scratch Postgres service container on every PR, catching irreversible or broken migrations before merge.","priority":"high","createdAt":26},"task-p0-27":{"id":"task-p0-27","title":"CI job: import-linter architecture contracts","description":"import-linter config encodes the intended layering (api \u2192 services \u2192 domain/repositories \u2192 infra, no reverse imports) and runs as a required CI job.","priority":"medium","createdAt":27},"task-p0-28":{"id":"task-p0-28","title":"CI job: pip-audit dependency scan","description":"pip-audit runs against the locked dependency set on every PR and fails on high-severity known vulnerabilities.","priority":"medium","createdAt":28},"task-p0-29":{"id":"task-p0-29","title":"CI job: validate Docker image build","description":"CI job runs docker build on every PR (no push) to catch Dockerfile breakage before merge, independent of the GHCR publish step.","priority":"medium","createdAt":29},"task-p0-30":{"id":"task-p0-30","title":"Add pull request template","description":".github/PULL_REQUEST_TEMPLATE.md prompts for change summary, testing performed, and migration/rollback notes so every PR carries consistent context.","priority":"low","createdAt":30},"task-p0-31":{"id":"task-p0-31","title":"Enable branch protection requiring CI checks","description":"main branch protection configured to require lint/typecheck, test, migration round-trip, import-linter, pip-audit, and docker-build checks to pass plus at least one review before merge.\n\nBLOCKED: Needs a live GitHub repo (this repo isn't pushed anywhere yet) plus admin access to configure branch protection rules.","priority":"medium","createdAt":31},"task-p0-32":{"id":"task-p0-32","title":"CI: build + push image to GHCR on main","description":"On merge to main, a workflow builds the production image and pushes it to GHCR tagged with the commit SHA (and latest), reusing the Dockerfile validated in CI.","priority":"high","createdAt":32},"task-p0-33":{"id":"task-p0-33","title":"Provision VPS: Docker, firewall, DNS record","description":"Target VPS has Docker + Compose installed, firewall allows only 22/80/443, and the project domain's A record points at the VPS IP.\n\nBLOCKED: Needs an actual VPS (provider, IP/SSH access) and a registered domain name from the user; nothing to provision against yet.","priority":"high","createdAt":33},"task-p0-34":{"id":"task-p0-34","title":"Add GitHub Actions deploy secrets (SSH)","description":"Deploy SSH private key, host, and user stored as GitHub Actions repo secrets; a minimal test workflow confirms SSH connectivity from Actions to the VPS.\n\nBLOCKED: Needs a live GitHub repo to hold Actions secrets, plus the VPS SSH key from p0-33.","priority":"medium","createdAt":34},"task-p0-35":{"id":"task-p0-35","title":"Configure production Caddy for real domain TLS","description":"Production Caddyfile on the VPS reverse-proxies the real domain to the api container and lets Caddy provision/renew TLS automatically via ACME; verified with a manual docker compose up on the VPS.\n\nBLOCKED: Needs the real domain name (for the Caddyfile) and the live VPS from p0-33.","priority":"high","createdAt":35},"task-p0-36":{"id":"task-p0-36","title":"Add tag-triggered deploy workflow (SSH + migrate)","description":"Pushing a version tag triggers a workflow that SSHes into the VPS, pulls the SHA-tagged image from GHCR, runs alembic upgrade head against production, then docker compose up -d.","priority":"high","createdAt":36},"task-p0-37":{"id":"task-p0-37","title":"Add health-gated deploy swap with auto-rollback","description":"Deploy workflow polls /readyz after compose up; on success the swap is complete, on failure it aborts and leaves the previous container running untouched, with the workflow reporting failure clearly.","priority":"high","createdAt":37},"task-p0-38":{"id":"task-p0-38","title":"Ship first production deploy (day-5 milestone)","description":"Tag a release, run the full pipeline end to end, and confirm https://<domain>/readyz returns 200 over real TLS with no manual intervention \u2014 the \"skeleton in production\" milestone.\n\nBLOCKED: Needs everything above (repo, VPS, DNS, secrets) to actually be live before a first deploy can run.","priority":"high","createdAt":38},"task-p0-39":{"id":"task-p0-39","title":"Adopt conventional commits via pre-commit hook","description":"A commit-msg hook (e.g. commitlint or a pre-commit hook) enforces conventional commit format locally, matching the convention documented in README/CONTRIBUTING.","priority":"low","createdAt":39},"task-p0-40":{"id":"task-p0-40","title":"Write first ADR: Phase 0 stack + deploy decisions","description":"docs/adr/0001-phase-0-skeleton.md records the key choices (uv, Alembic-only migrations, Caddy for TLS, health-gated deploy) and the alternatives rejected, in the project's ADR format.","priority":"low","createdAt":40},"task-p0-41":{"id":"task-p0-41","title":"Finalize README: setup, env vars, image size","description":"README covers local setup (Makefile targets), full env var reference (linking .env.example), final Docker image size, and a one-paragraph architecture overview of the running stack.","priority":"low","createdAt":41},"task-p1-01":{"id":"task-p1-01","title":"Scaffold Phase 1 domain/services/repositories modules","description":"Add empty domain/services/repositories submodules for tenants, api_keys, endpoints, and events with docstrings pinning the api \u2192 services \u2192 repositories \u2192 infra layering (domain imports nothing) before any Phase 1 code lands.","priority":"high","createdAt":1},"task-p1-02":{"id":"task-p1-02","title":"Alembic migration: create tenants table","description":"Autogenerate and hand-review a migration creating the tenants table (id, name, created_at, deleted_at) with `alembic upgrade head` verified locally against Postgres.","priority":"high","createdAt":2},"task-p1-03":{"id":"task-p1-03","title":"Alembic migration: create api_keys table","description":"Autogenerate and hand-review a migration creating the api_keys table (tenant_id FK, key_hash, key_prefix, scopes, revoked_at, created_at) with an index on key_prefix for fast lookup without a full-table scan.","priority":"high","createdAt":3},"task-p1-04":{"id":"task-p1-04","title":"Alembic migration: create endpoints table","description":"Autogenerate and hand-review a migration creating the endpoints table (tenant_id FK, url, secret, subscribed_event_types, status, breaker_state, opened_at) per the plan's data model, hand-reviewed before merge.","priority":"high","createdAt":4},"task-p1-05":{"id":"task-p1-05","title":"Alembic migration: create events table with idempotency constraint","description":"Autogenerate and hand-review a migration creating the events table (tenant_id FK, type, payload JSONB, idempotency_key, created_at) with a `UNIQUE(tenant_id, idempotency_key)` constraint enforced at the DB level.","priority":"high","createdAt":5}},"backlog":[{"id":"backlog-p1-06","title":"Define Phase 1 domain entities","description":"Define pure domain entities for Tenant, ApiKey, Endpoint, and Event as dataclasses/value objects with zero I/O and zero framework imports, expressing business rules (e.g. an ApiKey knows how to check its own scopes) independent of persistence or wire format.","priority":"high","createdAt":6},{"id":"backlog-p1-07","title":"Define Phase 1 ORM models","description":"Define SQLAlchemy 2.0 mapped classes for Tenant, ApiKey, Endpoint, and Event matching the Phase 1 migrations, kept in the repositories layer and never imported by the domain or api layers.","priority":"high","createdAt":7},{"id":"backlog-p1-08","title":"Define Phase 1 Pydantic wire schemas","description":"Define Pydantic request/response schemas for tenant, api-key, endpoint, and event payloads (create/update/read variants) in the api layer, mapped to/from domain entities at the boundary and never passed into services directly.","priority":"high","createdAt":8},{"id":"backlog-p1-09","title":"Implement TenantRepository and ApiKeyRepository","description":"Implement TenantRepository and ApiKeyRepository over the async SQLAlchemy session, exposing create/get/list/revoke operations that return domain entities (never ORM objects) and support prefix-based API key lookup.","priority":"high","createdAt":9},{"id":"backlog-p1-10","title":"Implement EndpointRepository with keyset pagination","description":"Implement EndpointRepository with create/get/update/delete/list operations returning domain entities, where list() accepts a cursor and limit and orders by a stable key for keyset pagination.","priority":"medium","createdAt":10},{"id":"backlog-p1-11","title":"Implement EventRepository with idempotency conflict detection","description":"Implement EventRepository with an insert operation that catches the `UNIQUE(tenant_id, idempotency_key)` DB violation and surfaces it as a typed domain conflict for the service layer to handle, rather than leaking a raw DB exception.","priority":"high","createdAt":11},{"id":"backlog-p1-12","title":"Implement unit-of-work for transaction boundaries","description":"Implement a unit-of-work context manager wrapping the async SQLAlchemy session and repositories, giving each service use case a single commit/rollback boundary instead of ad hoc session handling scattered across services.","priority":"high","createdAt":12},{"id":"backlog-p1-13","title":"Implement API key hashing, prefix, and verification","description":"Implement API key generation, salted hashing over the secret portion, prefix extraction, and constant-time verification as pure domain/infra logic, unit-tested against known vectors including tampered and truncated keys.","priority":"high","createdAt":13},{"id":"backlog-p1-14","title":"Implement API key issuance, rotation, and revocation service","description":"Implement an ApiKeyService use case for issuing a new key for a tenant, rotating a key (revoke + issue atomically via the unit-of-work), and revoking a key, returning the plaintext key exactly once at issuance time only.","priority":"medium","createdAt":14},{"id":"backlog-p1-15","title":"Implement auth dependency: key validation, scopes, tenant isolation","description":"Implement a FastAPI dependency that extracts the API key from the request header, verifies its hash and revocation status, loads the owning tenant, enforces required scopes, and scopes all downstream queries to that tenant \u2014 rejecting missing/malformed/revoked keys with 401 before any handler code runs.","priority":"high","createdAt":15},{"id":"backlog-p1-16","title":"Implement EndpointService use cases","description":"Implement an EndpointService with register/list/update/delete use cases (validating URL format and subscribed event types) operating purely on domain entities via the unit-of-work, with no FastAPI or SQLAlchemy imports.","priority":"medium","createdAt":16},{"id":"backlog-p1-17","title":"Implement /v1/endpoints CRUD router","description":"Implement the /v1/endpoints router (POST/GET/PATCH/DELETE) delegating entirely to EndpointService with no DB session or ORM import in the router module, converting between Pydantic schemas and domain entities at the boundary.","priority":"medium","createdAt":17},{"id":"backlog-p1-18","title":"Implement cursor pagination utility","description":"Implement an opaque, encoded cursor pagination helper (encode/decode keyset cursors) shared across list endpoints, replacing OFFSET-based paging, with unit tests covering forward paging and an invalid-cursor error case.","priority":"medium","createdAt":18},{"id":"backlog-p1-19","title":"Wire cursor pagination into GET /v1/endpoints","description":"Wire the cursor pagination helper into GET /v1/endpoints, returning `next_cursor`/`has_more` in the response envelope, covered by a test asserting stable ordering and no skipped/duplicated rows across pages.","priority":"medium","createdAt":19},{"id":"backlog-p1-20","title":"Implement EventIngestService idempotency-key handling","description":"Implement an EventIngestService use case that, given a tenant, event payload, and `Idempotency-Key`, returns the existing event unchanged if the key was seen before with an identical body, and raises a typed conflict if the key was seen before with a differing body.","priority":"high","createdAt":20},{"id":"backlog-p1-21","title":"Implement POST /v1/events ingest router","description":"Implement POST /v1/events delegating to EventIngestService, returning `202 Accepted` with a `Location` header pointing at the created event, and translating the idempotency conflict into the shared problem+json error envelope.","priority":"high","createdAt":21},{"id":"backlog-p1-22","title":"Implement RFC 9457 exception hierarchy and central handler","description":"Implement the internal exception hierarchy and a central FastAPI exception handler mapping all raised exceptions to RFC 9457 `application/problem+json` responses with `type`, `title`, `status`, `detail`, `instance`, and `trace_id` fields, never leaking a stack trace across the wire.","priority":"high","createdAt":22},{"id":"backlog-p1-23","title":"Normalize Pydantic 422s into the problem+json envelope","description":"Override FastAPI's default RequestValidationError handling so Pydantic 422s are normalized into the same problem+json envelope used by the rest of the API, with field-level errors under `detail` and no framework-default error shape leaking through.","priority":"medium","createdAt":23},{"id":"backlog-p1-24","title":"Add trace_id middleware for requests and errors","description":"Add middleware that generates (or propagates an inbound) trace/correlation ID per request, attaches it to structured logs for that request, and includes it in every problem+json error response so a user can quote it back.","priority":"medium","createdAt":24},{"id":"backlog-p1-25","title":"Add OpenAPI examples and auth scheme docs","description":"Add request/response examples and a documented API-key auth security scheme to every Phase 1 v1 endpoint's OpenAPI metadata, including the full set of problem+json error response shapes per endpoint.","priority":"medium","createdAt":25},{"id":"backlog-p1-26","title":"CI job: OpenAPI spec drift check","description":"Add a CI step that generates the OpenAPI spec from the running app, diffs it against a committed spec file under docs/, and fails the build on drift, with a Makefile target to regenerate the committed spec locally.","priority":"medium","createdAt":26},{"id":"backlog-p1-27","title":"Extend import-linter contract for Phase 1 modules","description":"Extend the import-linter contract to cover the new tenants/api_keys/endpoints/events modules across api/services/domain/repositories, and verify a deliberately forbidden import (repositories importing from domain) fails the contract.","priority":"medium","createdAt":27},{"id":"backlog-p1-28","title":"Add testcontainers Postgres fixture for integration suite","description":"Add a testcontainers-managed real Postgres fixture for tests/integration (container-scoped, schema applied via `alembic upgrade head`, transactional rollback per test), reusing the Phase 0 Redis client wiring with no stream logic, and confirm no SQLite or mocked DB appears anywhere in the suite.","priority":"high","createdAt":28},{"id":"backlog-p1-29","title":"Add polyfactory factories for Phase 1 entities","description":"Add polyfactory factories for Tenant, ApiKey, Endpoint, and Event domain entities so integration tests can generate realistic test data without hand-rolled fixtures.","priority":"medium","createdAt":29},{"id":"backlog-p1-30","title":"Integration test: idempotency key dedup","description":"Add an integration test proving a duplicate POST /v1/events with the same `Idempotency-Key` and identical body returns the original event with no second row inserted, covering Testing scenario #5 against real Postgres.","priority":"high","createdAt":30},{"id":"backlog-p1-31","title":"Integration test: 409 on differing body for reused key","description":"Add an integration test proving POST /v1/events with a reused `Idempotency-Key` but a differing body returns `409` via the problem+json envelope, covering Testing scenario #6 against real Postgres.","priority":"high","createdAt":31},{"id":"backlog-p1-32","title":"Integration test: revoked/malformed key and tenant isolation","description":"Add integration tests proving a revoked or malformed API key is rejected with `401`, and that a valid key belonging to tenant A cannot read or modify tenant B's endpoints or events, covering Testing scenario #12 against real Postgres.","priority":"high","createdAt":32},{"id":"backlog-p1-33","title":"Write ADR: Phase 1 API and domain decisions","description":"Write docs/adr/0002-phase-1-api-domain.md capturing the Phase 1 decisions (three-model-set layering, idempotency-key conflict semantics, cursor vs offset pagination, API key hashing scheme) with alternatives considered and the tradeoff accepted for each.","priority":"low","createdAt":33},{"id":"backlog-p1-34","title":"Update docs/failure-modes.md with Phase 1 rows","description":"Add Phase 1 rows to docs/failure-modes.md (duplicate idempotency key, differing-body idempotency conflict, revoked/malformed API key, cross-tenant access attempt), each naming the expected behavior and the test that proves it.","priority":"low","createdAt":34}]}
+</script>
+
+<header>
+  <div>
+    <h1>Kanban</h1>
+    <div class="sub" id="sync-status">Saved automatically in this browser</div>
+  </div>
+  <div class="header-actions">
+    <button class="btn" id="export-btn">Export</button>
+    <button class="btn" id="import-btn">Import</button>
+    <input type="file" id="import-input" accept="application/json">
+  </div>
+</header>
+
+<div class="app-body">
+  <nav class="sidebar">
+    <button class="nav-item" data-view="board"><span class="nav-icon">&#128203;</span> Board</button>
+    <button class="nav-item" data-view="backlog"><span class="nav-icon">&#128194;</span> Backlog <span class="nav-badge" id="backlog-count">0</span></button>
+  </nav>
+  <div class="content">
+    <div id="board-view"></div>
+    <div id="backlog-view" class="hidden"></div>
+  </div>
+</div>
+
+<script>
+(function () {
+  const STORAGE_KEY = "kanban-board-v1";
+
+  const defaultState = () => ({
+    rev: 0,
+    columns: ["col-todo", "col-doing", "col-done"],
+    columnData: {
+      "col-todo": { title: "To Do", taskIds: [] },
+      "col-doing": { title: "In Progress", taskIds: [] },
+      "col-done": { title: "Done", taskIds: [] }
+    },
+    tasks: {},
+    backlog: []
+  });
+
+  function readSeedState() {
+    try {
+      const el = document.getElementById("board-seed");
+      if (!el) return null;
+      const parsed = JSON.parse(el.textContent);
+      if (!parsed.columns || !parsed.columnData || !parsed.tasks) return null;
+      if (!Array.isArray(parsed.backlog)) parsed.backlog = [];
+      if (typeof parsed.rev !== "number") parsed.rev = 0;
+      return parsed;
+    } catch (e) {
+      return null;
+    }
+  }
+
+  // The seed block above is regenerated by kanban-board/board_cli.py every time
+  // ticket status changes. Its `rev` always wins over localStorage so a plain
+  // page refresh always reflects the latest real status, even in a browser tab
+  // that already had older board state saved locally.
+  function loadState() {
+    const seed = readSeedState();
+    let stored = null;
+    try {
+      const raw = localStorage.getItem(STORAGE_KEY);
+      if (raw) {
+        const parsed = JSON.parse(raw);
+        if (parsed.columns && parsed.columnData && parsed.tasks) {
+          if (!Array.isArray(parsed.backlog)) parsed.backlog = [];
+          if (typeof parsed.rev !== "number") parsed.rev = 0;
+          stored = parsed;
+        }
+      }
+    } catch (e) {
+      stored = null;
+    }
+
+    if (seed && (!stored || seed.rev > stored.rev)) return seed;
+    if (stored) return stored;
+    if (seed) return seed;
+    return defaultState();
+  }
+
+  function saveState() {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+  }
+
+  let state = loadState();
+  let currentView = "board";
+  let idCounter = Date.now();
+  function uid(prefix) {
+    idCounter += 1;
+    return prefix + "-" + idCounter.toString(36);
+  }
+
+  const boardView = document.getElementById("board-view");
+  const backlogView = document.getElementById("backlog-view");
+
+  function renderApp() {
+    document.querySelectorAll(".nav-item").forEach(btn => {
+      btn.classList.toggle("active", btn.dataset.view === currentView);
+    });
+    document.getElementById("backlog-count").textContent = state.backlog.length;
+    boardView.classList.toggle("hidden", currentView !== "board");
+    backlogView.classList.toggle("hidden", currentView !== "backlog");
+
+    const statusEl = document.getElementById("sync-status");
+    const doingCol = state.columnData["col-doing"];
+    const inProgress = doingCol ? doingCol.taskIds.map(id => state.tasks[id]).filter(Boolean) : [];
+    if (inProgress.length) {
+      statusEl.textContent = "Live · rev " + (state.rev || 0) + " · in progress: " + inProgress.map(t => t.title).join(", ");
+    } else {
+      statusEl.textContent = "Live · rev " + (state.rev || 0) + " · nothing in progress";
+    }
+
+    if (currentView === "board") renderBoard();
+    else renderBacklog();
+  }
+
+  document.querySelectorAll(".nav-item").forEach(btn => {
+    btn.addEventListener("click", () => {
+      currentView = btn.dataset.view;
+      renderApp();
+    });
+  });
+
+  // ---------- Board ----------
+
+  function renderBoard() {
+    boardView.innerHTML = "";
+    state.columns.forEach(colId => {
+      boardView.appendChild(renderColumn(colId));
+    });
+    boardView.appendChild(renderNewColumnButton());
+  }
+
+  function renderColumn(colId) {
+    const col = state.columnData[colId];
+    const el = document.createElement("div");
+    el.className = "column";
+    el.dataset.colId = colId;
+
+    const header = document.createElement("div");
+    header.className = "column-header";
+
+    const titleWrap = document.createElement("div");
+    titleWrap.style.display = "flex";
+    titleWrap.style.alignItems = "center";
+    titleWrap.style.flex = "1";
+    titleWrap.style.minWidth = "0";
+
+    const titleInput = document.createElement("input");
+    titleInput.className = "column-title";
+    titleInput.value = col.title;
+    titleInput.addEventListener("change", () => {
+      col.title = titleInput.value.trim() || col.title;
+      saveState();
+    });
+    titleInput.addEventListener("keydown", e => {
+      if (e.key === "Enter") titleInput.blur();
+    });
+
+    const count = document.createElement("span");
+    count.className = "count";
+    count.textContent = col.taskIds.length;
+
+    titleWrap.appendChild(titleInput);
+    titleWrap.appendChild(count);
+
+    const delBtn = document.createElement("button");
+    delBtn.className = "col-delete";
+    delBtn.textContent = "×";
+    delBtn.title = "Delete column";
+    delBtn.addEventListener("click", () => {
+      if (col.taskIds.length && !confirm(`Delete "${col.title}" and its ${col.taskIds.length} task(s)?`)) return;
+      col.taskIds.forEach(tid => delete state.tasks[tid]);
+      state.columns = state.columns.filter(id => id !== colId);
+      delete state.columnData[colId];
+      saveState();
+      renderApp();
+    });
+
+    header.appendChild(titleWrap);
+    header.appendChild(delBtn);
+
+    const list = document.createElement("div");
+    list.className = "task-list";
+    list.dataset.colId = colId;
+
+    col.taskIds.forEach(taskId => {
+      list.appendChild(renderCard(taskId, colId));
+    });
+
+    setupDropZone(list, colId);
+
+    const addBtn = document.createElement("button");
+    addBtn.className = "add-task-btn";
+    addBtn.textContent = "+ Add a task";
+    addBtn.addEventListener("click", () => showAddTaskForm(el, list, colId, addBtn));
+
+    el.appendChild(header);
+    el.appendChild(list);
+    el.appendChild(addBtn);
+    return el;
+  }
+
+  function showAddTaskForm(columnEl, list, colId, addBtn) {
+    addBtn.style.display = "none";
+    const form = buildTaskForm({
+      onSave: (data) => {
+        const taskId = uid("task");
+        state.tasks[taskId] = { id: taskId, createdAt: Date.now(), ...data };
+        state.columnData[colId].taskIds.push(taskId);
+        saveState();
+        renderApp();
+      },
+      onCancel: () => {
+        form.remove();
+        addBtn.style.display = "block";
+      },
+      saveLabel: "Add"
+    });
+    columnEl.insertBefore(form, addBtn);
+    form.querySelector(".f-title").focus();
+  }
+
+  function renderCard(taskId, colId) {
+    const task = state.tasks[taskId];
+    const card = document.createElement("div");
+    card.className = "card" + (task.priority ? " priority-" + task.priority : "");
+    card.draggable = true;
+    card.dataset.taskId = taskId;
+
+    const title = document.createElement("div");
+    title.className = "card-title";
+    title.textContent = task.title;
+    card.appendChild(title);
+
+    if (task.description) {
+      const desc = document.createElement("div");
+      desc.className = "card-desc";
+      desc.textContent = task.description;
+      card.appendChild(desc);
+    }
+
+    const removeBtn = document.createElement("button");
+    removeBtn.className = "card-remove";
+    removeBtn.textContent = "×";
+    removeBtn.title = "Delete task";
+    removeBtn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      state.columnData[colId].taskIds = state.columnData[colId].taskIds.filter(id => id !== taskId);
+      delete state.tasks[taskId];
+      saveState();
+      renderApp();
+    });
+    card.appendChild(removeBtn);
+
+    card.addEventListener("click", (e) => {
+      if (e.target === removeBtn) return;
+      editCard(card, taskId, colId);
+    });
+
+    card.addEventListener("dragstart", () => {
+      card.classList.add("dragging");
+      dragged = { taskId, fromCol: colId };
+    });
+    card.addEventListener("dragend", () => {
+      card.classList.remove("dragging");
+      dragged = null;
+      renderApp();
+    });
+
+    return card;
+  }
+
+  function editCard(card, taskId, colId) {
+    const task = state.tasks[taskId];
+    card.innerHTML = "";
+    card.style.cursor = "default";
+    card.draggable = false;
+    const form = buildTaskForm({
+      initial: task,
+      onSave: (data) => {
+        Object.assign(task, data);
+        saveState();
+        renderApp();
+      },
+      onCancel: () => renderApp(),
+      saveLabel: "Save"
+    });
+    form.style.margin = "0";
+    form.style.boxShadow = "none";
+    form.style.padding = "0";
+    card.appendChild(form);
+  }
+
+  let dragged = null;
+
+  function setupDropZone(list, colId) {
+    list.addEventListener("dragover", (e) => {
+      e.preventDefault();
+      const afterEl = getDragAfterElement(list, e.clientY);
+      clearPlaceholders();
+      const placeholder = document.createElement("div");
+      placeholder.className = "drop-placeholder";
+      if (afterEl) list.insertBefore(placeholder, afterEl);
+      else list.appendChild(placeholder);
+    });
+
+    list.addEventListener("dragleave", (e) => {
+      if (!list.contains(e.relatedTarget)) clearPlaceholders();
+    });
+
+    list.addEventListener("drop", (e) => {
+      e.preventDefault();
+      if (!dragged) return;
+      const { taskId, fromCol } = dragged;
+      const afterEl = getDragAfterElement(list, e.clientY);
+      const toCol = colId;
+
+      state.columnData[fromCol].taskIds = state.columnData[fromCol].taskIds.filter(id => id !== taskId);
+
+      const targetIds = state.columnData[toCol].taskIds;
+      if (afterEl) {
+        const afterId = afterEl.dataset.taskId;
+        const idx = targetIds.indexOf(afterId);
+        targetIds.splice(idx, 0, taskId);
+      } else {
+        targetIds.push(taskId);
+      }
+
+      clearPlaceholders();
+      saveState();
+      renderApp();
+    });
+  }
+
+  function clearPlaceholders() {
+    document.querySelectorAll(".drop-placeholder").forEach(p => p.remove());
+  }
+
+  function getDragAfterElement(list, y) {
+    const cards = [...list.querySelectorAll(".card:not(.dragging)")];
+    let closest = { offset: -Infinity, element: null };
+    for (const child of cards) {
+      const box = child.getBoundingClientRect();
+      const offset = y - box.top - box.height / 2;
+      if (offset < 0 && offset > closest.offset) {
+        closest = { offset, element: child };
+      }
+    }
+    return closest.element;
+  }
+
+  function renderNewColumnButton() {
+    const wrap = document.createElement("div");
+    wrap.className = "new-column";
+    const btn = document.createElement("button");
+    btn.className = "new-column-btn";
+    btn.textContent = "+ Add column";
+    btn.addEventListener("click", () => {
+      const title = prompt("Column name:");
+      if (!title || !title.trim()) return;
+      const colId = uid("col");
+      state.columns.push(colId);
+      state.columnData[colId] = { title: title.trim(), taskIds: [] };
+      saveState();
+      renderApp();
+    });
+    wrap.appendChild(btn);
+    return wrap;
+  }
+
+  // ---------- Shared task/backlog form builder ----------
+
+  function buildTaskForm({ initial, onSave, onCancel, saveLabel }) {
+    const form = document.createElement("div");
+    form.className = "add-form";
+    form.innerHTML = `
+      <input type="text" placeholder="Title" class="f-title">
+      <textarea placeholder="Description (optional)" rows="2" class="f-desc"></textarea>
+      <div class="row">
+        <select class="f-priority">
+          <option value="">No priority</option>
+          <option value="low">Low</option>
+          <option value="medium">Medium</option>
+          <option value="high">High</option>
+        </select>
+      </div>
+      <div class="form-actions">
+        <button class="btn btn-primary f-save">${saveLabel}</button>
+        <button class="btn f-cancel">Cancel</button>
+      </div>
+    `;
+    const titleField = form.querySelector(".f-title");
+    const descField = form.querySelector(".f-desc");
+    const priorityField = form.querySelector(".f-priority");
+
+    if (initial) {
+      titleField.value = initial.title || "";
+      descField.value = initial.description || "";
+      priorityField.value = initial.priority || "";
+    }
+
+    function save() {
+      const title = titleField.value.trim();
+      if (!title) { onCancel(); return; }
+      onSave({
+        title,
+        description: descField.value.trim(),
+        priority: priorityField.value
+      });
+    }
+
+    form.querySelector(".f-save").addEventListener("click", (e) => { e.stopPropagation(); save(); });
+    form.querySelector(".f-cancel").addEventListener("click", (e) => { e.stopPropagation(); onCancel(); });
+    form.addEventListener("click", (e) => e.stopPropagation());
+    titleField.addEventListener("keydown", e => {
+      if (e.key === "Enter") { e.preventDefault(); save(); }
+      if (e.key === "Escape") onCancel();
+    });
+
+    return form;
+  }
+
+  // ---------- Backlog ----------
+
+  function renderBacklog() {
+    backlogView.innerHTML = "";
+
+    const header = document.createElement("div");
+    header.className = "backlog-header";
+    header.innerHTML = `<h2>Backlog</h2><div class="sub">Ordered by priority — drag to reorder. Push items to the board when you're ready to work on them.</div>`;
+    backlogView.appendChild(header);
+
+    const addBtn = document.createElement("button");
+    addBtn.className = "add-task-btn";
+    addBtn.id = "backlog-add-btn";
+    addBtn.textContent = "+ Add to backlog";
+    addBtn.addEventListener("click", () => showAddBacklogForm(addBtn));
+    backlogView.appendChild(addBtn);
+
+    const list = document.createElement("div");
+    list.className = "backlog-list";
+    list.id = "backlog-list";
+
+    if (state.backlog.length === 0) {
+      const empty = document.createElement("div");
+      empty.className = "backlog-empty";
+      empty.textContent = "Nothing here yet. Brain-dump ideas above — you don't need to fully define them until you're ready to work on them.";
+      list.appendChild(empty);
+    } else {
+      state.backlog.forEach(item => list.appendChild(renderBacklogCard(item)));
+    }
+
+    setupBacklogDropZone(list);
+    backlogView.appendChild(list);
+  }
+
+  function showAddBacklogForm(addBtn) {
+    addBtn.style.display = "none";
+    const form = buildTaskForm({
+      onSave: (data) => {
+        const id = uid("backlog");
+        state.backlog.push({ id, createdAt: Date.now(), ...data });
+        saveState();
+        renderApp();
+      },
+      onCancel: () => {
+        form.remove();
+        addBtn.style.display = "block";
+      },
+      saveLabel: "Add"
+    });
+    backlogView.insertBefore(form, addBtn.nextSibling);
+    form.querySelector(".f-title").focus();
+  }
+
+  function renderBacklogCard(item) {
+    const card = document.createElement("div");
+    card.className = "card backlog-card" + (item.priority ? " priority-" + item.priority : "");
+    card.draggable = true;
+    card.dataset.backlogId = item.id;
+
+    const title = document.createElement("div");
+    title.className = "card-title";
+    title.textContent = item.title;
+    card.appendChild(title);
+
+    if (item.description) {
+      const desc = document.createElement("div");
+      desc.className = "card-desc";
+      desc.textContent = item.description;
+      card.appendChild(desc);
+    }
+
+    const removeBtn = document.createElement("button");
+    removeBtn.className = "card-remove";
+    removeBtn.textContent = "×";
+    removeBtn.title = "Delete";
+    removeBtn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      state.backlog = state.backlog.filter(b => b.id !== item.id);
+      saveState();
+      renderApp();
+    });
+    card.appendChild(removeBtn);
+
+    const actions = document.createElement("div");
+    actions.className = "backlog-actions";
+    const toTodoBtn = document.createElement("button");
+    toTodoBtn.className = "to-todo-btn";
+    toTodoBtn.textContent = "Add to " + (state.columnData[state.columns[0]] ? state.columnData[state.columns[0]].title : "board") + " →";
+    toTodoBtn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      moveBacklogItemToBoard(item.id);
+    });
+    actions.appendChild(toTodoBtn);
+    card.appendChild(actions);
+
+    card.addEventListener("click", (e) => {
+      if (e.target === removeBtn || e.target === toTodoBtn) return;
+      editBacklogCard(card, item);
+    });
+
+    card.addEventListener("dragstart", () => {
+      card.classList.add("dragging");
+      draggedBacklogId = item.id;
+    });
+    card.addEventListener("dragend", () => {
+      card.classList.remove("dragging");
+      draggedBacklogId = null;
+      renderApp();
+    });
+
+    return card;
+  }
+
+  function editBacklogCard(card, item) {
+    card.innerHTML = "";
+    card.style.cursor = "default";
+    card.draggable = false;
+    const form = buildTaskForm({
+      initial: item,
+      onSave: (data) => {
+        Object.assign(item, data);
+        saveState();
+        renderApp();
+      },
+      onCancel: () => renderApp(),
+      saveLabel: "Save"
+    });
+    form.style.margin = "0";
+    form.style.boxShadow = "none";
+    form.style.padding = "0";
+    card.appendChild(form);
+  }
+
+  function moveBacklogItemToBoard(backlogId, colId) {
+    const idx = state.backlog.findIndex(b => b.id === backlogId);
+    if (idx === -1) return;
+    const item = state.backlog[idx];
+    const targetCol = colId || state.columns[0];
+    if (!targetCol) { alert("Add a column to the board first."); return; }
+
+    const taskId = uid("task");
+    state.tasks[taskId] = {
+      id: taskId,
+      title: item.title,
+      description: item.description,
+      priority: item.priority,
+      createdAt: Date.now()
+    };
+    state.columnData[targetCol].taskIds.push(taskId);
+    state.backlog.splice(idx, 1);
+    saveState();
+    renderApp();
+  }
+
+  let draggedBacklogId = null;
+
+  function setupBacklogDropZone(list) {
+    list.addEventListener("dragover", (e) => {
+      e.preventDefault();
+      const afterEl = getDragAfterElementGeneric(list, e.clientY, ".backlog-card:not(.dragging)");
+      clearPlaceholders();
+      const placeholder = document.createElement("div");
+      placeholder.className = "drop-placeholder";
+      if (afterEl) list.insertBefore(placeholder, afterEl);
+      else list.appendChild(placeholder);
+    });
+
+    list.addEventListener("dragleave", (e) => {
+      if (!list.contains(e.relatedTarget)) clearPlaceholders();
+    });
+
+    list.addEventListener("drop", (e) => {
+      e.preventDefault();
+      clearPlaceholders();
+      if (!draggedBacklogId) return;
+      const afterEl = getDragAfterElementGeneric(list, e.clientY, ".backlog-card:not(.dragging)");
+      const fromIdx = state.backlog.findIndex(b => b.id === draggedBacklogId);
+      if (fromIdx === -1) return;
+      const [item] = state.backlog.splice(fromIdx, 1);
+
+      if (afterEl) {
+        const afterId = afterEl.dataset.backlogId;
+        const idx = state.backlog.findIndex(b => b.id === afterId);
+        state.backlog.splice(idx, 0, item);
+      } else {
+        state.backlog.push(item);
+      }
+
+      saveState();
+      renderApp();
+    });
+  }
+
+  function getDragAfterElementGeneric(list, y, selector) {
+    const els = [...list.querySelectorAll(selector)];
+    let closest = { offset: -Infinity, element: null };
+    for (const child of els) {
+      const box = child.getBoundingClientRect();
+      const offset = y - box.top - box.height / 2;
+      if (offset < 0 && offset > closest.offset) {
+        closest = { offset, element: child };
+      }
+    }
+    return closest.element;
+  }
+
+  // ---------- Export / Import ----------
+
+  document.getElementById("export-btn").addEventListener("click", () => {
+    const blob = new Blob([JSON.stringify(state, null, 2)], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = "kanban-backup.json";
+    a.click();
+    URL.revokeObjectURL(url);
+  });
+
+  const importInput = document.getElementById("import-input");
+  document.getElementById("import-btn").addEventListener("click", () => importInput.click());
+  importInput.addEventListener("change", () => {
+    const file = importInput.files[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = () => {
+      try {
+        const parsed = JSON.parse(reader.result);
+        if (!parsed.columns || !parsed.columnData || !parsed.tasks) {
+          alert("Invalid backup file.");
+          return;
+        }
+        if (!Array.isArray(parsed.backlog)) parsed.backlog = [];
+        state = parsed;
+        saveState();
+        renderApp();
+      } catch (e) {
+        alert("Could not read that file.");
+      }
+    };
+    reader.readAsText(file);
+    importInput.value = "";
+  });
+
+  renderApp();
+})();
+</script>
+
+</body>
+</html>
