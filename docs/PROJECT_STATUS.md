@@ -19,9 +19,10 @@ in code — 34/34 tickets, fully tested against real Postgres — but **not yet 
 is still running whatever Phase 0 image was last shipped. Phase 2 (the delivery engine) is
 complete in code — 34/34 tickets, 162 tests passing (unit + integration against real Postgres and
 Redis, including all seven Phase-2-relevant crash/retry scenarios from the plan's testing
-section) — also **not yet deployed**. Deploying Phase 1 and Phase 2 together is a deliberate next
-action, not a side effect of this work landing on `main`; see "What's next" below for what that
-deploy still needs before it's safe to run unattended in production.
+section) — also **not yet deployed**, though the production deploy config (`compose.prod.yml`,
+`deploy_remote.sh`) is now updated to run the four new worker containers. Deploying Phase 1 and
+Phase 2 together is a deliberate next action, not a side effect of this work landing on `main`;
+see "What's next" below.
 
 ## Phase 0 — skeleton (complete, deployed)
 
@@ -215,23 +216,25 @@ data model, but nothing transitions a delivery into it yet — retries currently
 indefinitely at the capped backoff interval rather than exhausting a budget).
 
 **Known gotchas added in Phase 2:**
-- `docker/compose.prod.yml` and `scripts/deploy_remote.sh` were **not** updated to bring up the
-  four new worker containers — `deploy_remote.sh` only ever does `docker compose ... up -d api`.
-  Deploying Phase 2 as-is would ship the delivery-engine code but leave outbox rows piling up
-  unprocessed in production with nothing consuming them. This needs a deliberate look (which
-  workers get their own container vs. co-located, restart policy, resource limits on the shared
-  VPS) before the next production deploy, not just a copy-paste of the local `compose.yml`
-  services.
 - `httpx` moved from a dev-only dependency to a main one in Phase 2 (the real outbound sender
   needs it at runtime, not just in tests) — if a future phase removes the real adapter for some
   reason, check whether it should move back.
 
+**Done (production deploy wiring, added after Phase 2 code-complete):**
+`docker/compose.prod.yml` now defines `relay-worker`, `dispatcher`, `scheduler`, and `reaper`
+services alongside `api` — same `$RELAY_IMAGE`, same DB/Redis env wiring, `restart:
+unless-stopped`, no ports exposed (they don't serve HTTP), baked-in `HEALTHCHECK` disabled (it
+curls `/healthz`, which only `api` serves). `scripts/deploy_remote.sh` now brings up all five
+services together on every swap and rolls all five back together if `/readyz` never goes green —
+`api`'s `/readyz` (Postgres + Redis) remains the single health gate for the whole swap, since none
+of the workers have an HTTP endpoint of their own to check individually. Deploying the api image
+alone (the old behavior) would have shipped the delivery-engine code with nothing running it.
+
 ## What's next
 
-Deploy Phase 1 and Phase 2 together (tag + push, same flow as Phase 0) — but first update
-`docker/compose.prod.yml` / `deploy_remote.sh` to actually bring up the four worker containers
-(see "Known gotchas" above); shipping the api image alone would silently leave events undelivered.
-Then Phase 3 (HMAC signing, SSRF guard incl. the IP-pinned transport, circuit breaker, DLQ +
-replay endpoint, per-tenant rate limiting) → Phase 4 (the public demo console + the remaining
+Deploy Phase 1 and Phase 2 together (tag + push, same flow as Phase 0) — the prod compose/deploy-
+script gap above is closed, so this is now just the normal deploy flow. Then Phase 3 (HMAC
+signing, SSRF guard incl. the IP-pinned transport, circuit breaker, DLQ + replay endpoint,
+per-tenant rate limiting) → Phase 4 (the public demo console + the remaining
 failure-scenario tests — SSRF-blocked redirect, breaker open/half-open/closed, revoked/malformed
 API key — that prove the full guarantee set is real, not aspirational).

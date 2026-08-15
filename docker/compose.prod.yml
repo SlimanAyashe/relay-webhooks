@@ -62,5 +62,92 @@ services:
       traefik.http.routers.relay.tls.certresolver: letsencrypt
       traefik.http.services.relay.loadbalancer.server.port: "8000"
 
+  relay-worker:
+    image: ${RELAY_IMAGE:?RELAY_IMAGE must be set to a ghcr.io image ref}
+    command: ["python", "-m", "relay.workers.relay"]
+    env_file:
+      - path: ../.env
+        required: false
+    environment:
+      DATABASE_URL: postgresql+asyncpg://relay:${POSTGRES_PASSWORD}@postgres:5432/relay
+      REDIS_URL: redis://redis:6379/0
+    read_only: true
+    tmpfs:
+      - /tmp
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+    # The image's baked-in HEALTHCHECK curls /healthz, which only the api service serves --
+    # workers don't listen on any port, so disable it rather than have Docker report them
+    # perpetually unhealthy.
+    healthcheck:
+      disable: true
+
+  dispatcher:
+    image: ${RELAY_IMAGE:?RELAY_IMAGE must be set to a ghcr.io image ref}
+    command: ["python", "-m", "relay.workers.dispatcher"]
+    env_file:
+      - path: ../.env
+        required: false
+    environment:
+      DATABASE_URL: postgresql+asyncpg://relay:${POSTGRES_PASSWORD}@postgres:5432/relay
+      REDIS_URL: redis://redis:6379/0
+    read_only: true
+    tmpfs:
+      - /tmp
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+    healthcheck:
+      disable: true
+
+  scheduler:
+    image: ${RELAY_IMAGE:?RELAY_IMAGE must be set to a ghcr.io image ref}
+    command: ["python", "-m", "relay.workers.scheduler"]
+    env_file:
+      - path: ../.env
+        required: false
+    environment:
+      DATABASE_URL: postgresql+asyncpg://relay:${POSTGRES_PASSWORD}@postgres:5432/relay
+      REDIS_URL: redis://redis:6379/0
+    read_only: true
+    tmpfs:
+      - /tmp
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+    healthcheck:
+      disable: true
+
+  reaper:
+    image: ${RELAY_IMAGE:?RELAY_IMAGE must be set to a ghcr.io image ref}
+    command: ["python", "-m", "relay.workers.reaper"]
+    env_file:
+      - path: ../.env
+        required: false
+    environment:
+      DATABASE_URL: postgresql+asyncpg://relay:${POSTGRES_PASSWORD}@postgres:5432/relay
+      REDIS_URL: redis://redis:6379/0
+    read_only: true
+    tmpfs:
+      - /tmp
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+    healthcheck:
+      disable: true
+
 volumes:
   pgdata:
