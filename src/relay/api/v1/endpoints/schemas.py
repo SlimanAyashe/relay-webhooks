@@ -9,16 +9,20 @@ from relay.domain.endpoints import BreakerState, Endpoint, EndpointStatus
 class EndpointCreate(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    url: HttpUrl
-    subscribed_event_types: list[str] = Field(min_length=1)
+    url: HttpUrl = Field(examples=["https://example.com/webhooks/relay"])
+    subscribed_event_types: list[str] = Field(
+        min_length=1, examples=[["order.created", "order.updated"]]
+    )
 
 
 class EndpointUpdate(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    url: HttpUrl | None = None
-    subscribed_event_types: list[str] | None = Field(default=None, min_length=1)
-    status: EndpointStatus | None = None
+    url: HttpUrl | None = Field(default=None, examples=["https://example.com/webhooks/relay"])
+    subscribed_event_types: list[str] | None = Field(
+        default=None, min_length=1, examples=[["order.created", "order.updated"]]
+    )
+    status: EndpointStatus | None = Field(default=None, examples=["active"])
 
 
 class EndpointRead(BaseModel):

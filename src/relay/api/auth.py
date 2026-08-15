@@ -10,7 +10,14 @@ from relay.domain.api_keys.hashing import split_api_key, verify_secret
 from relay.domain.tenants import Tenant
 from relay.repositories.unit_of_work import UnitOfWork, get_unit_of_work
 
-_api_key_header = APIKeyHeader(name="X-API-Key", auto_error=False)
+_api_key_header = APIKeyHeader(
+    name="X-API-Key",
+    auto_error=False,
+    description=(
+        "A Relay API key, in the form `<prefix>.<secret>`. Scoped to a single "
+        "tenant; every request is authorized and tenant-scoped by this key."
+    ),
+)
 
 _INVALID_KEY_DETAIL = "missing or invalid API key"
 

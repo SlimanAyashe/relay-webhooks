@@ -1,7 +1,7 @@
 import uuid
 from datetime import datetime
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
 from relay.domain.events import Event
 
@@ -9,8 +9,8 @@ from relay.domain.events import Event
 class EventCreate(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    type: str
-    payload: dict[str, object]
+    type: str = Field(examples=["order.created"])
+    payload: dict[str, object] = Field(examples=[{"order_id": "ord_123", "total_cents": 4200}])
 
 
 class EventRead(BaseModel):

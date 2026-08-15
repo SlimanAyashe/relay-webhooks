@@ -3,6 +3,7 @@ import uuid
 from fastapi import APIRouter, Depends, Query, status
 
 from relay.api.auth import AuthContext, require_scope
+from relay.api.openapi import problem_responses
 from relay.api.v1.endpoints.schemas import (
     EndpointCreate,
     EndpointCreated,
@@ -19,7 +20,17 @@ _require_read = require_scope("endpoints:read")
 _require_write = require_scope("endpoints:write")
 
 
-@router.post("", status_code=status.HTTP_201_CREATED, response_model=EndpointCreated)
+@router.post(
+    "",
+    status_code=status.HTTP_201_CREATED,
+    response_model=EndpointCreated,
+    responses=problem_responses(401, 403, 422),
+    summary="Register a new endpoint",
+    description=(
+        "Registers a webhook endpoint for the authenticated tenant. The response "
+        "includes the HMAC signing secret -- the only time it's ever returned."
+    ),
+)
 async def create_endpoint(
     body: EndpointCreate,
     auth: AuthContext = Depends(_require_write),
@@ -32,7 +43,13 @@ async def create_endpoint(
     return EndpointCreated.created_from_domain(endpoint)
 
 
-@router.get("", response_model=EndpointListResponse)
+@router.get(
+    "",
+    response_model=EndpointListResponse,
+    responses=problem_responses(401, 403, 422),
+    summary="List endpoints",
+    description="Cursor-paginated: pass the previous response's next_cursor to page forward.",
+)
 async def list_endpoints(
     cursor: str | None = None,
     limit: int = Query(default=50, ge=1, le=200),
@@ -48,7 +65,12 @@ async def list_endpoints(
     )
 
 
-@router.get("/{endpoint_id}", response_model=EndpointRead)
+@router.get(
+    "/{endpoint_id}",
+    response_model=EndpointRead,
+    responses=problem_responses(401, 403, 404),
+    summary="Get an endpoint",
+)
 async def get_endpoint(
     endpoint_id: uuid.UUID,
     auth: AuthContext = Depends(_require_read),
@@ -59,7 +81,13 @@ async def get_endpoint(
     return EndpointRead.from_domain(endpoint)
 
 
-@router.patch("/{endpoint_id}", response_model=EndpointRead)
+@router.patch(
+    "/{endpoint_id}",
+    response_model=EndpointRead,
+    responses=problem_responses(401, 403, 404, 422),
+    summary="Update an endpoint",
+    description="Only the fields present in the request body are changed.",
+)
 async def update_endpoint(
     endpoint_id: uuid.UUID,
     body: EndpointUpdate,
@@ -81,7 +109,12 @@ async def update_endpoint(
     return EndpointRead.from_domain(updated)
 
 
-@router.delete("/{endpoint_id}", status_code=status.HTTP_204_NO_CONTENT)
+@router.delete(
+    "/{endpoint_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    responses=problem_responses(401, 403, 404),
+    summary="Delete an endpoint",
+)
 async def delete_endpoint(
     endpoint_id: uuid.UUID,
     auth: AuthContext = Depends(_require_write),
