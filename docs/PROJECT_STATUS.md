@@ -12,7 +12,7 @@ retry backoff, per-endpoint circuit breakers, and a replayable dead-letter queue
 guarantees, and the full build-phase breakdown live in the project plan (kept outside this repo —
 ask whoever's driving the project for it if you need the full spec beyond what's summarized here).
 
-## Current status: Phase 0 — skeleton, 38/41 tickets done
+## Current status: Phase 0 — skeleton, 37/41 tickets done
 
 Phase 0's goal: an empty-but-real skeleton deployed to production before any feature work starts,
 so every later phase ships into a stack already proven to deploy.
