@@ -6,7 +6,11 @@ from sqlalchemy import pool
 from sqlalchemy.engine import Connection
 from sqlalchemy.ext.asyncio import async_engine_from_config
 
+# Every ORM model module must be imported here so its table registers on Base.metadata
+# before autogenerate runs.
+import relay.repositories.tenants.models  # noqa: F401
 from relay.infra.settings import get_settings
+from relay.repositories.base import Base
 
 # this is the Alembic Config object, which provides
 # access to the values within the .ini file in use.
@@ -21,11 +25,7 @@ if config.config_file_name is not None:
 # local/CI/prod migrations target the same database the app itself connects to.
 config.set_main_option("sqlalchemy.url", get_settings().database_url)
 
-# add your model's MetaData object here
-# for 'autogenerate' support
-# from myapp import mymodel
-# target_metadata = mymodel.Base.metadata
-target_metadata = None
+target_metadata = Base.metadata
 
 # other values from the config, defined by the needs of env.py,
 # can be acquired:
