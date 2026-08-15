@@ -1,21 +1,22 @@
 name: relay
 
 # Production overlay: api runs the pre-built GHCR image (set via $RELAY_IMAGE
-# by scripts/deploy_remote.sh) instead of building locally, and Caddy handles
-# real TLS on the real domain instead of local plain-HTTP proxying. Bring up
-# with: RELAY_IMAGE=ghcr.io/<owner>/<repo>:<sha> docker compose -f
+# by scripts/deploy_remote.sh). TLS termination and routing are handled by
+# the host's shared Traefik instance (see docs/adr/0002-shared-vps-traefik.md)
+# via labels below, not by a Relay-owned proxy — this VPS also runs other
+# production services (bookr.tech, n8n) whose Traefik already owns 80/443.
+# Bring up with: RELAY_IMAGE=ghcr.io/<owner>/<repo>:<sha> docker compose -f
 # docker/compose.prod.yml up -d
 #
-# NOT deployable yet — docker/Caddyfile.prod (the real-domain, real-TLS
-# config this file expects) doesn't exist until there's an actual domain to
-# put in it. See README "Known limitations" and backlog ticket p0-35.
+# Expects a .env file one directory up (../.env relative to this file, i.e.
+# /opt/relay/.env on the VPS — never committed) providing POSTGRES_PASSWORD.
 
 services:
   postgres:
     image: postgres:16-alpine
     environment:
       POSTGRES_USER: relay
-      POSTGRES_PASSWORD: relay
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set in .env}
       POSTGRES_DB: relay
     volumes:
       - pgdata:/var/lib/postgresql/data
@@ -41,8 +42,10 @@ services:
       - path: ../.env
         required: false
     environment:
-      DATABASE_URL: postgresql+asyncpg://relay:relay@postgres:5432/relay
+      DATABASE_URL: postgresql+asyncpg://relay:${POSTGRES_PASSWORD}@postgres:5432/relay
       REDIS_URL: redis://redis:6379/0
+    ports:
+      - "127.0.0.1:8000:8000" # loopback-only, for deploy_remote.sh's own /readyz poll
     read_only: true
     tmpfs:
       - /tmp
@@ -52,19 +55,12 @@ services:
       redis:
         condition: service_healthy
     restart: unless-stopped
-
-  caddy:
-    image: caddy:2-alpine
-    volumes:
-      - ./Caddyfile.prod:/etc/caddy/Caddyfile:ro
-      - caddy_data:/data
-    ports:
-      - "80:80"
-      - "443:443"
-    depends_on:
-      - api
-    restart: unless-stopped
+    labels:
+      traefik.enable: "true"
+      traefik.http.routers.relay.rule: Host(`relay.bookr.tech`) || Host(`api.relay.bookr.tech`)
+      traefik.http.routers.relay.entrypoints: websecure
+      traefik.http.routers.relay.tls.certresolver: letsencrypt
+      traefik.http.services.relay.loadbalancer.server.port: "8000"
 
 volumes:
   pgdata:
-  caddy_data:
