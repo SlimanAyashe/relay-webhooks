@@ -12,6 +12,7 @@ Usage:
   python board_cli.py done <id>                      # -> Done
   python board_cli.py block <id> <reason...>          # -> Blocked (creates column)
 """
+
 import json
 import re
 import sys
