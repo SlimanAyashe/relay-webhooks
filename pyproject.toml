@@ -25,6 +25,7 @@ dev = [
     "testcontainers[postgres,redis]>=4.8",
     "import-linter>=2.1",
     "pip-audit>=2.7",
+    "polyfactory>=3.3.0",
 ]
 
 [build-system]
