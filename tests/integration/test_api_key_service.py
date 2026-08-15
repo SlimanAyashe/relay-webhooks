@@ -4,6 +4,7 @@ import pytest
 from sqlalchemy.ext.asyncio import AsyncEngine, async_sessionmaker
 
 from relay.domain.api_keys.hashing import split_api_key, verify_secret
+from relay.domain.errors import NotFoundError
 from relay.repositories.unit_of_work import UnitOfWork
 from relay.services.api_keys.service import ApiKeyService
 
@@ -58,7 +59,7 @@ async def test_revoke_wrong_tenant_raises_lookup_error(db_engine: AsyncEngine) -
     other_tenant_id = await _make_tenant_id(uow)
     api_key, _ = await service.issue(tenant_id, frozenset({"*"}))
 
-    with pytest.raises(LookupError):
+    with pytest.raises(NotFoundError):
         await service.revoke(api_key.id, other_tenant_id)
 
     async with uow:
@@ -101,7 +102,7 @@ async def test_rotate_wrong_tenant_raises_lookup_error_and_changes_nothing(
     other_tenant_id = await _make_tenant_id(uow)
     api_key, _ = await service.issue(tenant_id, frozenset({"*"}))
 
-    with pytest.raises(LookupError):
+    with pytest.raises(NotFoundError):
         await service.rotate(api_key.id, other_tenant_id)
 
     async with uow:

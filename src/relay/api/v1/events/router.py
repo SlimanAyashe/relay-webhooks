@@ -1,9 +1,9 @@
-from fastapi import APIRouter, Depends, Header, HTTPException, Response, status
+from fastapi import APIRouter, Depends, Header, Response, status
 
 from relay.api.auth import AuthContext, require_scope
 from relay.api.v1.events.schemas import EventCreate, EventRead
 from relay.repositories.unit_of_work import UnitOfWork, get_unit_of_work
-from relay.services.events.service import DifferingBodyConflict, EventIngestService
+from relay.services.events.service import EventIngestService
 
 router = APIRouter(prefix="/v1/events", tags=["events"])
 
@@ -20,15 +20,11 @@ async def ingest_event(
 ) -> EventRead:
     """202, not 200 -- ingestion accepts the event for delivery, it doesn't confirm
     delivery. A replayed request (same Idempotency-Key, identical body) gets the same
-    202 and the original event back, not a fresh one.
+    202 and the original event back, not a fresh one. A differing body raises
+    DifferingBodyConflict, caught by the central error handler and turned into 409.
     """
     service = EventIngestService(uow)
-    try:
-        event = await service.ingest(auth.tenant.id, body.type, body.payload, idempotency_key)
-    except DifferingBodyConflict as exc:
-        # TODO(p1-22/p1-23): translate into the shared RFC 9457 problem+json envelope
-        # once the central exception hierarchy exists; plain HTTPException for now.
-        raise HTTPException(status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+    event = await service.ingest(auth.tenant.id, body.type, body.payload, idempotency_key)
 
     response.headers["Location"] = f"/v1/events/{event.id}"
     return EventRead.from_domain(event)

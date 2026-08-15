@@ -5,6 +5,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from relay.domain.api_keys import ApiKey
+from relay.domain.errors import NotFoundError
 from relay.repositories.api_keys.models import ApiKeyModel
 
 
@@ -60,7 +61,7 @@ class ApiKeyRepository:
     async def revoke(self, key_id: uuid.UUID) -> ApiKey:
         model = await self._session.get(ApiKeyModel, key_id)
         if model is None:
-            raise LookupError(f"api key not found: {key_id}")
+            raise NotFoundError(f"api key not found: {key_id}")
         model.revoked_at = datetime.now(UTC)
         await self._session.flush()
         await self._session.refresh(model)

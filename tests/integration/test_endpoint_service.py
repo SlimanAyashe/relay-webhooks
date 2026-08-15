@@ -4,6 +4,7 @@ import pytest
 from sqlalchemy.ext.asyncio import AsyncEngine, async_sessionmaker
 
 from relay.domain.endpoints import EndpointStatus
+from relay.domain.errors import NotFoundError, ValidationError
 from relay.repositories.unit_of_work import UnitOfWork
 from relay.services.endpoints.service import EndpointService
 
@@ -38,7 +39,7 @@ async def test_register_rejects_non_https_url(db_engine: AsyncEngine) -> None:
     service, uow = _service(db_engine)
     tenant_id = await _make_tenant_id(uow)
 
-    with pytest.raises(ValueError, match="https"):
+    with pytest.raises(ValidationError, match="https"):
         await service.register(tenant_id, "http://example.com/webhook", frozenset({"a"}))
 
 
@@ -46,7 +47,7 @@ async def test_register_rejects_empty_event_types(db_engine: AsyncEngine) -> Non
     service, uow = _service(db_engine)
     tenant_id = await _make_tenant_id(uow)
 
-    with pytest.raises(ValueError, match="empty"):
+    with pytest.raises(ValidationError, match="empty"):
         await service.register(tenant_id, "https://example.com/webhook", frozenset())
 
 
@@ -68,7 +69,7 @@ async def test_update_wrong_tenant_raises_lookup_error(db_engine: AsyncEngine) -
     other_tenant_id = await _make_tenant_id(uow)
     endpoint = await service.register(tenant_id, "https://example.com", frozenset({"x"}))
 
-    with pytest.raises(LookupError):
+    with pytest.raises(NotFoundError):
         await service.update(endpoint.id, other_tenant_id, status=EndpointStatus.DISABLED)
 
 
@@ -91,7 +92,7 @@ async def test_delete_wrong_tenant_raises_lookup_error_and_does_not_delete(
     other_tenant_id = await _make_tenant_id(uow)
     endpoint = await service.register(tenant_id, "https://example.com", frozenset({"x"}))
 
-    with pytest.raises(LookupError):
+    with pytest.raises(NotFoundError):
         await service.delete(endpoint.id, other_tenant_id)
 
     async with uow:

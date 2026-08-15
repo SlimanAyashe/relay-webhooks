@@ -4,13 +4,14 @@ from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from relay.domain.errors import ConflictError
 from relay.domain.events import Event
 from relay.repositories.events.models import EventModel
 
 _UNIQUE_VIOLATION_SQLSTATE = "23505"
 
 
-class IdempotencyKeyConflict(Exception):
+class IdempotencyKeyConflict(ConflictError):
     """A row already exists for (tenant_id, idempotency_key). Raised only on the DB-level
     unique-violation race — the expected path is the service layer checking
     get_by_idempotency_key() first and deciding same-body-replay vs differing-body-409

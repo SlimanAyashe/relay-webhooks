@@ -4,6 +4,7 @@ import pytest
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from relay.domain.endpoints import EndpointStatus
+from relay.domain.errors import NotFoundError
 from relay.repositories.endpoints.repository import EndpointRepository
 from relay.repositories.tenants.repository import TenantRepository
 
@@ -64,7 +65,7 @@ async def test_delete_removes_endpoint(db_session: AsyncSession) -> None:
 async def test_delete_missing_endpoint_raises_lookup_error(db_session: AsyncSession) -> None:
     repo = EndpointRepository(db_session)
 
-    with pytest.raises(LookupError):
+    with pytest.raises(NotFoundError):
         await repo.delete(uuid.uuid4())
 
 

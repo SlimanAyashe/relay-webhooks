@@ -4,6 +4,7 @@ from sqlalchemy import select, tuple_
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from relay.domain.endpoints import BreakerState, Endpoint, EndpointStatus
+from relay.domain.errors import NotFoundError
 from relay.repositories.endpoints.models import EndpointModel
 from relay.repositories.pagination import Page, decode_cursor, encode_cursor
 
@@ -56,7 +57,7 @@ class EndpointRepository:
     ) -> Endpoint:
         model = await self._session.get(EndpointModel, endpoint_id)
         if model is None:
-            raise LookupError(f"endpoint not found: {endpoint_id}")
+            raise NotFoundError(f"endpoint not found: {endpoint_id}")
         if url is not None:
             model.url = url
         if subscribed_event_types is not None:
@@ -70,7 +71,7 @@ class EndpointRepository:
     async def delete(self, endpoint_id: uuid.UUID) -> None:
         model = await self._session.get(EndpointModel, endpoint_id)
         if model is None:
-            raise LookupError(f"endpoint not found: {endpoint_id}")
+            raise NotFoundError(f"endpoint not found: {endpoint_id}")
         await self._session.delete(model)
         await self._session.flush()
 

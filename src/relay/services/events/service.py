@@ -1,11 +1,12 @@
 import uuid
 
+from relay.domain.errors import ConflictError
 from relay.domain.events import Event
 from relay.repositories.events.repository import IdempotencyKeyConflict
 from relay.repositories.unit_of_work import UnitOfWork
 
 
-class DifferingBodyConflict(Exception):
+class DifferingBodyConflict(ConflictError):
     """The idempotency key was reused with a type/payload that doesn't match the first
     request that used it -- the caller should surface this as 409, not silently overwrite
     or silently replay the wrong event.

@@ -2,6 +2,7 @@ import uuid
 
 from relay.domain.api_keys import ApiKey
 from relay.domain.api_keys.hashing import generate_api_key
+from relay.domain.errors import NotFoundError
 from relay.repositories.unit_of_work import UnitOfWork
 
 
@@ -29,7 +30,7 @@ class ApiKeyService:
         async with self._uow:
             existing = await self._uow.api_keys.get(key_id)
             if existing is None or existing.tenant_id != tenant_id:
-                raise LookupError(f"api key not found for tenant {tenant_id!r}: {key_id!r}")
+                raise NotFoundError(f"api key not found for tenant {tenant_id!r}: {key_id!r}")
 
             await self._uow.api_keys.revoke(key_id)
             plaintext_key, key_prefix, key_hash = generate_api_key()
@@ -46,7 +47,7 @@ class ApiKeyService:
         async with self._uow:
             existing = await self._uow.api_keys.get(key_id)
             if existing is None or existing.tenant_id != tenant_id:
-                raise LookupError(f"api key not found for tenant {tenant_id!r}: {key_id!r}")
+                raise NotFoundError(f"api key not found for tenant {tenant_id!r}: {key_id!r}")
 
             revoked = await self._uow.api_keys.revoke(key_id)
             await self._uow.commit()

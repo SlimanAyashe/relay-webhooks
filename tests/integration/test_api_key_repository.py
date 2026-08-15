@@ -3,6 +3,7 @@ import uuid
 import pytest
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from relay.domain.errors import NotFoundError
 from relay.repositories.api_keys.repository import ApiKeyRepository
 from relay.repositories.tenants.repository import TenantRepository
 
@@ -76,5 +77,5 @@ async def test_revoke_sets_revoked_at(db_session: AsyncSession) -> None:
 async def test_revoke_missing_key_raises_lookup_error(db_session: AsyncSession) -> None:
     repo = ApiKeyRepository(db_session)
 
-    with pytest.raises(LookupError):
+    with pytest.raises(NotFoundError):
         await repo.revoke(uuid.uuid4())

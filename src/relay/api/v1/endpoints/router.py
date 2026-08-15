@@ -1,6 +1,6 @@
 import uuid
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, Query, status
 
 from relay.api.auth import AuthContext, require_scope
 from relay.api.v1.endpoints.schemas import (
@@ -15,7 +15,6 @@ from relay.services.endpoints.service import EndpointService
 
 router = APIRouter(prefix="/v1/endpoints", tags=["endpoints"])
 
-_NOT_FOUND_DETAIL = "endpoint not found"
 _require_read = require_scope("endpoints:read")
 _require_write = require_scope("endpoints:write")
 
@@ -27,12 +26,9 @@ async def create_endpoint(
     uow: UnitOfWork = Depends(get_unit_of_work),
 ) -> EndpointCreated:
     service = EndpointService(uow)
-    try:
-        endpoint = await service.register(
-            auth.tenant.id, str(body.url), frozenset(body.subscribed_event_types)
-        )
-    except ValueError as exc:
-        raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, detail=str(exc)) from exc
+    endpoint = await service.register(
+        auth.tenant.id, str(body.url), frozenset(body.subscribed_event_types)
+    )
     return EndpointCreated.created_from_domain(endpoint)
 
 
@@ -44,10 +40,7 @@ async def list_endpoints(
     uow: UnitOfWork = Depends(get_unit_of_work),
 ) -> EndpointListResponse:
     service = EndpointService(uow)
-    try:
-        page = await service.list(auth.tenant.id, cursor=cursor, limit=limit)
-    except ValueError as exc:
-        raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, detail=str(exc)) from exc
+    page = await service.list(auth.tenant.id, cursor=cursor, limit=limit)
     return EndpointListResponse(
         items=[EndpointRead.from_domain(endpoint) for endpoint in page.items],
         next_cursor=page.next_cursor,
@@ -62,10 +55,7 @@ async def get_endpoint(
     uow: UnitOfWork = Depends(get_unit_of_work),
 ) -> EndpointRead:
     service = EndpointService(uow)
-    try:
-        endpoint = await service.get(endpoint_id, auth.tenant.id)
-    except LookupError as exc:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, detail=_NOT_FOUND_DETAIL) from exc
+    endpoint = await service.get(endpoint_id, auth.tenant.id)
     return EndpointRead.from_domain(endpoint)
 
 
@@ -77,22 +67,17 @@ async def update_endpoint(
     uow: UnitOfWork = Depends(get_unit_of_work),
 ) -> EndpointRead:
     service = EndpointService(uow)
-    try:
-        updated = await service.update(
-            endpoint_id,
-            auth.tenant.id,
-            url=str(body.url) if body.url is not None else None,
-            subscribed_event_types=(
-                frozenset(body.subscribed_event_types)
-                if body.subscribed_event_types is not None
-                else None
-            ),
-            status=body.status,
-        )
-    except LookupError as exc:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, detail=_NOT_FOUND_DETAIL) from exc
-    except ValueError as exc:
-        raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, detail=str(exc)) from exc
+    updated = await service.update(
+        endpoint_id,
+        auth.tenant.id,
+        url=str(body.url) if body.url is not None else None,
+        subscribed_event_types=(
+            frozenset(body.subscribed_event_types)
+            if body.subscribed_event_types is not None
+            else None
+        ),
+        status=body.status,
+    )
     return EndpointRead.from_domain(updated)
 
 
@@ -103,7 +88,4 @@ async def delete_endpoint(
     uow: UnitOfWork = Depends(get_unit_of_work),
 ) -> None:
     service = EndpointService(uow)
-    try:
-        await service.delete(endpoint_id, auth.tenant.id)
-    except LookupError as exc:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, detail=_NOT_FOUND_DETAIL) from exc
+    await service.delete(endpoint_id, auth.tenant.id)

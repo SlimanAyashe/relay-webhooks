@@ -3,8 +3,10 @@ import uuid
 from dataclasses import dataclass
 from datetime import datetime
 
+from relay.domain.errors import ValidationError
 
-class CursorDecodeError(ValueError):
+
+class CursorDecodeError(ValidationError):
     """Raised when a client-supplied cursor is malformed or not one this API issued."""
 
 
