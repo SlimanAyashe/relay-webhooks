@@ -44,6 +44,13 @@ class EndpointService:
             await self._uow.commit()
         return endpoint
 
+    async def get(self, endpoint_id: uuid.UUID, tenant_id: uuid.UUID) -> Endpoint:
+        async with self._uow:
+            endpoint = await self._uow.endpoints.get(endpoint_id)
+        if endpoint is None or endpoint.tenant_id != tenant_id:
+            raise LookupError(f"endpoint not found for tenant {tenant_id!r}: {endpoint_id!r}")
+        return endpoint
+
     async def list(
         self, tenant_id: uuid.UUID, *, cursor: str | None = None, limit: int = 50
     ) -> Page[Endpoint]:

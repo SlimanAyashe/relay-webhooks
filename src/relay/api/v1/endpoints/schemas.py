@@ -61,3 +61,9 @@ class EndpointCreated(EndpointRead):
             created_at=endpoint.created_at,
             secret=endpoint.secret,
         )
+
+
+class EndpointListResponse(BaseModel):
+    items: list[EndpointRead]
+    next_cursor: str | None
+    has_more: bool
