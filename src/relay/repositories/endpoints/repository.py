@@ -1,4 +1,5 @@
 import uuid
+from datetime import datetime
 
 from sqlalchemy import any_, literal, select, tuple_
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -22,6 +23,7 @@ def _to_domain(model: EndpointModel) -> Endpoint:
         status=EndpointStatus(model.status),
         breaker_state=BreakerState(model.breaker_state),
         opened_at=model.opened_at,
+        consecutive_failures=model.consecutive_failures,
     )
 
 
@@ -74,6 +76,47 @@ class EndpointRepository:
             raise NotFoundError(f"endpoint not found: {endpoint_id}")
         await self._session.delete(model)
         await self._session.flush()
+
+    async def record_delivery_outcome(
+        self,
+        endpoint_id: uuid.UUID,
+        *,
+        breaker_state: BreakerState,
+        consecutive_failures: int,
+        opened_at: datetime | None,
+    ) -> Endpoint:
+        """Persists a circuit-breaker transition. Called from inside the same unit of work
+        (and about to be committed in the same transaction) as the delivery_attempts row
+        and the Delivery state update it's a consequence of, so a concurrent read of this
+        endpoint's breaker state is never stale relative to the attempt that just completed.
+        """
+        model = await self._get_or_raise(endpoint_id)
+        model.breaker_state = breaker_state.value
+        model.consecutive_failures = consecutive_failures
+        model.opened_at = opened_at
+        await self._session.flush()
+        await self._session.refresh(model)
+        return _to_domain(model)
+
+    async def set_breaker_state(
+        self, endpoint_id: uuid.UUID, *, breaker_state: BreakerState, opened_at: datetime | None
+    ) -> Endpoint:
+        """Updates only breaker_state/opened_at, leaving consecutive_failures untouched --
+        used for the OPEN-cooldown-elapsed -> HALF_OPEN transition, which happens *before*
+        the probe attempt runs (so it isn't itself the outcome of an attempt).
+        """
+        model = await self._get_or_raise(endpoint_id)
+        model.breaker_state = breaker_state.value
+        model.opened_at = opened_at
+        await self._session.flush()
+        await self._session.refresh(model)
+        return _to_domain(model)
+
+    async def _get_or_raise(self, endpoint_id: uuid.UUID) -> EndpointModel:
+        model = await self._session.get(EndpointModel, endpoint_id)
+        if model is None:
+            raise NotFoundError(f"endpoint not found: {endpoint_id}")
+        return model
 
     async def list_active_subscribed(self, tenant_id: uuid.UUID, event_type: str) -> list[Endpoint]:
         """Active endpoints for `tenant_id` subscribed to `event_type` -- the fan-out target
