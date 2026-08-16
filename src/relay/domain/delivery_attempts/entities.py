@@ -14,6 +14,12 @@ class AttemptErrorClass(StrEnum):
     HTTP_ERROR = "http_error"
     TIMEOUT = "timeout"
     CONNECTION_ERROR = "connection_error"
+    # The destination (or a redirect hop) resolved to a denied network -- loopback,
+    # RFC1918, link-local, CGNAT, IPv6 ULA, or the cloud metadata IP -- or targeted a
+    # non-allow-listed port. Recorded as its own class rather than folded into
+    # CONNECTION_ERROR so a blocked destination is distinguishable from a merely
+    # unreachable one, both to an operator and to the demo console.
+    SSRF_BLOCKED = "ssrf_blocked"
 
 
 @dataclass(frozen=True, slots=True)
