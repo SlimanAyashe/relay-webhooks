@@ -14,15 +14,11 @@ ask whoever's driving the project for it if you need the full spec beyond what's
 
 ## Current status
 
-Phase 0 (skeleton) is complete and deployed to production. Phase 1 (API and domain) is complete
-in code — 34/34 tickets, fully tested against real Postgres — but **not yet deployed**; the VPS
-is still running whatever Phase 0 image was last shipped. Phase 2 (the delivery engine) is
-complete in code — 34/34 tickets, 162 tests passing (unit + integration against real Postgres and
-Redis, including all seven Phase-2-relevant crash/retry scenarios from the plan's testing
-section) — also **not yet deployed**, though the production deploy config (`compose.prod.yml`,
-`deploy_remote.sh`) is now updated to run the four new worker containers. Deploying Phase 1 and
-Phase 2 together is a deliberate next action, not a side effect of this work landing on `main`;
-see "What's next" below.
+Phase 0 (skeleton), Phase 1 (API and domain), and Phase 2 (the delivery engine) are all complete
+in code and now **deployed to production** as `v0.1.7` — `api`, `relay-worker`, `dispatcher`,
+`scheduler`, and `reaper` all running, `/readyz` green (Postgres + Redis both `ok`). See "Phase 1
+deploy, 2026-08-15/16" under Phase 2 below for what the deploy actually took (three unrelated
+bugs, none of them in the application code).
 
 ## Phase 0 — skeleton (complete, deployed)
 
@@ -111,8 +107,16 @@ It took a few tag pushes to get there (`v0.1.0`–`v0.1.5`); worth knowing for n
 - The CI job added in Phase 1 (`openapi-drift`) brings the required-checks count to 7; branch
   protection's required-checks list on GitHub still only names the original 6 and needs updating
   to match, or `openapi-drift` won't actually gate merges despite running.
+- `deploy.yml` now `scp`s `docker/compose.prod.yml` to the VPS on every deploy, not just
+  `deploy_remote.sh` — it used to only copy the script, so the VPS's compose file silently
+  drifted from the repo (see "Phase 1 + 2 deploy" under Phase 2 below). Never edit
+  `/opt/relay/docker/compose.prod.yml` directly on the VPS; it gets overwritten on the next
+  deploy.
+- Never run `docker/compose.yml` (the local-dev file, no suffix) against the VPS, even by hand —
+  its `caddy` service fights the shared Traefik for :80/:443 and the whole stack gets torn down.
+  Only `compose.prod.yml`, only via `deploy_remote.sh`.
 
-## Phase 1 — API and domain (complete, not yet deployed)
+## Phase 1 — API and domain (complete, deployed)
 
 Phase 1's goal: tenants, API keys, endpoint CRUD, and event ingest with idempotency keys, fully
 layered (`api -> services -> repositories -> infra`, domain independent of all four) and tested
@@ -157,7 +161,7 @@ routes — the backlog only ever specified routers for endpoints and events, so 
 issuance has no HTTP surface yet. `ApiKeyService` exists and is fully tested; something (a future
 router, or an out-of-band admin process) still needs to call it.
 
-## Phase 2 — delivery engine (complete, not yet deployed)
+## Phase 2 — delivery engine (complete, deployed)
 
 Phase 2's goal: turn the durably-committed events from Phase 1 into actual outbound deliveries —
 transactional outbox, Redis Streams consumer groups, jittered retry/backoff, `XAUTOCLAIM` crash
@@ -230,11 +234,39 @@ services together on every swap and rolls all five back together if `/readyz` ne
 of the workers have an HTTP endpoint of their own to check individually. Deploying the api image
 alone (the old behavior) would have shipped the delivery-engine code with nothing running it.
 
+**Phase 1 + 2 deploy, 2026-08-15/16 — what it actually took:** the tag-push flow needed three
+rounds to reach a green `/readyz`, none of them application bugs:
+
+1. Before this deploy was even attempted, a stray manual `docker compose -f docker/compose.yml
+   up -d` (the *local dev* file, which includes Caddy) had been run directly against the prod
+   `relay_default` network. Caddy tried to bind :80/:443, which the shared Traefik already owns,
+   so the stack got torn down again — leaving `relay-api-1` and all four workers gone entirely
+   (Postgres/Redis, defined identically in both compose files, were left running throughout).
+   That's why prod was already 404-ing on every route before any new tag went out. Takeaway:
+   never run `docker/compose.yml` (no suffix) against the VPS — only `compose.prod.yml`, and only
+   via `deploy_remote.sh`.
+2. `v0.1.6` failed at the migration step: `password authentication failed for user "relay"`.
+   `/opt/relay/.env` carries `POSTGRES_PASSWORD` *and* a separately-typed `DATABASE_URL` (the
+   latter added for the standalone `alembic upgrade head` step — see the Phase 0 gotchas above);
+   the two had drifted out of sync, almost certainly from one of the several failed bootstrap
+   attempts during Phase 0 provisioning (`v0.1.0`–`v0.1.2` in the deploy history all failed).
+   Fixed by reading the *actual* password already baked into the running `relay-postgres-1`
+   container's own environment (the value real Postgres actually accepted at `initdb`) and
+   resyncing both `.env` keys to it — not by guessing or regenerating a new password, which would
+   have needed a Postgres-side `ALTER ROLE` too.
+3. `v0.1.7`'s first attempt failed with `no such service: relay-worker`. Cause: `deploy.yml` only
+   ever `scp`s `deploy_remote.sh` to the VPS — never `docker/compose.prod.yml`. That file only
+   reaches `/opt/relay/docker/` via one-off manual provisioning, so it had silently stayed on the
+   pre-Phase-2 version (no worker services) the whole time the repo's copy moved on. Fixed by
+   `scp`-ing the compose file alongside the script on every deploy from now on (see `deploy.yml`);
+   also had to manually sync the VPS's copy once to unblock this deploy itself.
+
+None of the three would have been caught by CI — they're all VPS-state problems, invisible from
+the repo. Worth a skim before the next deploy in case any of the same drift has crept back.
+
 ## What's next
 
-Deploy Phase 1 and Phase 2 together (tag + push, same flow as Phase 0) — the prod compose/deploy-
-script gap above is closed, so this is now just the normal deploy flow. Then Phase 3 (HMAC
-signing, SSRF guard incl. the IP-pinned transport, circuit breaker, DLQ + replay endpoint,
-per-tenant rate limiting) → Phase 4 (the public demo console + the remaining
+Phase 3 (HMAC signing, SSRF guard incl. the IP-pinned transport, circuit breaker, DLQ + replay
+endpoint, per-tenant rate limiting) → Phase 4 (the public demo console + the remaining
 failure-scenario tests — SSRF-blocked redirect, breaker open/half-open/closed, revoked/malformed
 API key — that prove the full guarantee set is real, not aspirational).
