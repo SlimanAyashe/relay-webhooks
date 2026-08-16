@@ -12,8 +12,10 @@ from relay.domain.deliveries import DeliveryState
 from relay.domain.delivery_attempts import AttemptErrorClass
 from relay.infra.http_sender import HttpxOutboundSender, OutboundHttpResult
 from relay.infra.retry_schedule import RETRY_ZSET
+from relay.infra.settings import Settings, get_settings
 from relay.repositories.delivery_attempts.models import DeliveryAttemptModel
 from relay.repositories.unit_of_work import UnitOfWork
+from relay.services.deliveries.service import DeliveryAttemptService
 from relay.workers.dispatcher import process_delivery_message
 from tests.fakes import FakeOutboundHttpSender
 
@@ -128,13 +130,26 @@ async def test_process_delivery_message_records_timeout_not_success(
         assert rows[0].response_status is None
 
 
+_PINNED_IP = "93.184.216.34"  # a fixed public (never-denied) address, never real DNS
+
+
+def _public_ip_resolver(hostname: str) -> list[str]:
+    """A fake resolver returning a fixed public address -- avoids depending on real DNS in
+    tests. HttpxOutboundSender's IP-pinned transport (relay.infra.pinned_transport) then
+    rewrites every request's URL host to this address *before* it reaches respx's mocked
+    transport -- so the routes below are registered against the pinned IP, not the original
+    hostname, matching what the adapter actually sends.
+    """
+    return [_PINNED_IP]
+
+
 @respx.mock
 async def test_httpx_sender_classifies_a_real_timeout() -> None:
     """Exercises the real HttpxOutboundSender adapter (not the fake) against a mocked
     transport, per the plan's testing mechanics: respx for outbound HTTP.
     """
-    respx.post("https://example.com/webhook").mock(side_effect=httpx.ReadTimeout("timed out"))
-    sender = HttpxOutboundSender()
+    respx.post(f"https://{_PINNED_IP}/webhook").mock(side_effect=httpx.ReadTimeout("timed out"))
+    sender = HttpxOutboundSender(resolver=_public_ip_resolver)
 
     result = await sender.send(url="https://example.com/webhook", payload=b"{}", headers={})
     await sender.aclose()
@@ -145,10 +160,10 @@ async def test_httpx_sender_classifies_a_real_timeout() -> None:
 
 @respx.mock
 async def test_httpx_sender_classifies_a_connection_error() -> None:
-    respx.post("https://example.com/webhook").mock(
+    respx.post(f"https://{_PINNED_IP}/webhook").mock(
         side_effect=httpx.ConnectError("connection refused")
     )
-    sender = HttpxOutboundSender()
+    sender = HttpxOutboundSender(resolver=_public_ip_resolver)
 
     result = await sender.send(url="https://example.com/webhook", payload=b"{}", headers={})
     await sender.aclose()
@@ -158,8 +173,8 @@ async def test_httpx_sender_classifies_a_connection_error() -> None:
 
 @respx.mock
 async def test_httpx_sender_classifies_a_non_2xx_as_http_error() -> None:
-    respx.post("https://example.com/webhook").mock(return_value=httpx.Response(500, text="boom"))
-    sender = HttpxOutboundSender()
+    respx.post(f"https://{_PINNED_IP}/webhook").mock(return_value=httpx.Response(500, text="boom"))
+    sender = HttpxOutboundSender(resolver=_public_ip_resolver)
 
     result = await sender.send(url="https://example.com/webhook", payload=b"{}", headers={})
     await sender.aclose()
@@ -205,3 +220,61 @@ async def test_redelivery_after_a_post_send_pre_ack_crash_produces_an_observable
         delivery = await check_uow.deliveries.get(delivery_id)
         assert delivery is not None
         assert delivery.attempt_count == 2  # both attempts are recorded, not deduplicated
+
+
+async def test_ssrf_blocked_result_is_recorded_and_retried_not_dropped(
+    db_engine: AsyncEngine, stream_redis: Redis
+) -> None:
+    """A blocked destination is classified as its own error class and still goes through
+    the normal retry path -- never silently dropped, and never conflated with a generic
+    connection failure.
+    """
+    sessionmaker = _sessionmaker(db_engine)
+    delivery_id = await _seed_delivery(sessionmaker)
+    sender = FakeOutboundHttpSender(
+        [OutboundHttpResult(latency_ms=1, error_class=AttemptErrorClass.SSRF_BLOCKED)]
+    )
+
+    await process_delivery_message(
+        lambda: UnitOfWork(sessionmaker), sender, stream_redis, delivery_id
+    )
+
+    async with UnitOfWork(sessionmaker) as check_uow:
+        delivery = await check_uow.deliveries.get(delivery_id)
+        attempts = await check_uow.delivery_attempts.list_for_delivery(delivery_id)
+    assert delivery is not None
+    assert delivery.state is DeliveryState.RETRYING
+    assert len(attempts) == 1
+    assert attempts[0].error_class is AttemptErrorClass.SSRF_BLOCKED
+
+
+async def test_retry_budget_exhaustion_moves_delivery_to_dead(db_engine: AsyncEngine) -> None:
+    """Once attempt_count reaches settings.delivery_max_attempts, the delivery is given up
+    on instead of scheduled for yet another retry -- what makes the DLQ real. Uses
+    DeliveryAttemptService directly (not process_delivery_message) with a breaker threshold
+    high enough that it never opens mid-test -- the breaker's own skip-and-defer behavior
+    is covered separately in test_circuit_breaker.py, and letting it open here would starve
+    later attempts of ever reaching the sender at all before the cooldown elapses.
+    """
+    default_settings = get_settings()
+    settings = Settings(
+        delivery_max_attempts=default_settings.delivery_max_attempts,
+        breaker_failure_threshold=default_settings.delivery_max_attempts + 1,
+    )
+    sessionmaker = _sessionmaker(db_engine)
+    delivery_id = await _seed_delivery(sessionmaker)
+    failure = OutboundHttpResult(
+        latency_ms=5, status_code=500, error_class=AttemptErrorClass.HTTP_ERROR
+    )
+    sender = FakeOutboundHttpSender([failure] * settings.delivery_max_attempts)
+
+    for _ in range(settings.delivery_max_attempts):
+        service = DeliveryAttemptService(UnitOfWork(sessionmaker), sender, settings=settings)
+        await service.attempt(delivery_id)
+
+    async with UnitOfWork(sessionmaker) as check_uow:
+        delivery = await check_uow.deliveries.get(delivery_id)
+    assert delivery is not None
+    assert delivery.state is DeliveryState.DEAD
+    assert delivery.attempt_count == settings.delivery_max_attempts
+    assert delivery.next_retry_at is None

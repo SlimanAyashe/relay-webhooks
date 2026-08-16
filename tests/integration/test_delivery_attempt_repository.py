@@ -53,3 +53,23 @@ async def test_create_records_a_timeout_attempt_with_no_status(db_session: Async
 
     assert attempt.response_status is None
     assert attempt.error_class is AttemptErrorClass.TIMEOUT
+
+
+async def test_list_for_delivery_returns_the_full_history_oldest_first(
+    db_session: AsyncSession,
+) -> None:
+    delivery_id = await _make_delivery_id(db_session)
+    repo = DeliveryAttemptRepository(db_session)
+    await repo.create(delivery_id=delivery_id, attempt_no=1, latency_ms=5, response_status=500)
+    await repo.create(delivery_id=delivery_id, attempt_no=2, latency_ms=5, response_status=500)
+    await repo.create(delivery_id=delivery_id, attempt_no=3, latency_ms=5, response_status=200)
+
+    attempts = await repo.list_for_delivery(delivery_id)
+
+    assert [a.attempt_no for a in attempts] == [1, 2, 3]
+
+
+async def test_list_for_delivery_returns_empty_for_unknown_delivery(
+    db_session: AsyncSession,
+) -> None:
+    assert await DeliveryAttemptRepository(db_session).list_for_delivery(uuid.uuid4()) == []

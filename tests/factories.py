@@ -101,6 +101,10 @@ class EndpointFactory(DataclassFactory[Endpoint]):
     def opened_at(cls) -> None:
         return None
 
+    @classmethod
+    def consecutive_failures(cls) -> int:
+        return 0
+
 
 class EventFactory(DataclassFactory[Event]):
     __model__ = Event

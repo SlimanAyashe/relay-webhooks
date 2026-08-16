@@ -19,6 +19,7 @@ from sqlalchemy.ext.asyncio import (
 from testcontainers.community.postgres import PostgresContainer
 from testcontainers.community.redis import RedisContainer
 
+from relay.infra.redis import get_redis
 from relay.infra.settings import get_settings
 from relay.infra.streams import DELIVERY_STREAM, DISPATCH_GROUP, ensure_consumer_group
 from relay.repositories.unit_of_work import UnitOfWork, get_unit_of_work
@@ -155,13 +156,25 @@ def auth_headers(
     return _make
 
 
-@pytest.fixture
-def wired_client(client: TestClient, postgres_url: str) -> Iterator[TestClient]:
+@pytest_asyncio.fixture
+async def wired_client(
+    client: TestClient, postgres_url: str, redis_url: str, stream_redis: Redis
+) -> AsyncIterator[TestClient]:
     """Its own engine too, for the same cross-loop reason as auth_headers -- this one is
     only ever used from inside the TestClient portal thread's loop, since
-    dependency_overrides only calls the lambda while FastAPI is resolving a request.
+    dependency_overrides only calls the lambda while FastAPI is resolving a request. Redis
+    gets the same treatment: the override builds a brand new client per dependency
+    resolution (from `redis_url`, not by reusing the `stream_redis` fixture's own client
+    object) since a Redis client holds a connection bound to the event loop that created
+    it, and reusing one across the portal thread's separate loop raises exactly the kind
+    of "attached to a different loop" error the DB side avoids the same way. `stream_redis`
+    is still depended on here purely for its flush-before/after side effect, so routes
+    hitting Redis (rate limiting, DLQ replay's re-enqueue) see a clean keyspace per test.
     """
     sessionmaker = async_sessionmaker(create_async_engine(postgres_url), expire_on_commit=False)
     client.app.dependency_overrides[get_unit_of_work] = lambda: UnitOfWork(sessionmaker)  # type: ignore[attr-defined]
+    client.app.dependency_overrides[get_redis] = lambda: Redis.from_url(  # type: ignore[attr-defined]
+        redis_url, decode_responses=True
+    )
     yield client
     client.app.dependency_overrides.clear()  # type: ignore[attr-defined]

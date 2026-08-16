@@ -52,14 +52,25 @@ _EXAMPLES: dict[int, dict[str, object]] = {
         "instance": "/v1/endpoints",
         "trace_id": "b3f1c2a4-5e6d-4f7a-8b9c-0d1e2f3a4b5c",
     },
+    429: {
+        "type": "/problems/rate-limited",
+        "title": "Too Many Requests",
+        "status": 429,
+        "detail": "rate limit exceeded, retry after 1.00s",
+        "instance": "/v1/events",
+        "trace_id": "b3f1c2a4-5e6d-4f7a-8b9c-0d1e2f3a4b5c",
+    },
 }
 
 _DESCRIPTIONS: dict[int, str] = {
     401: "Missing, malformed, unknown, or revoked API key.",
     403: "A valid key that lacks the scope this endpoint requires.",
     404: "No resource with this id belongs to the authenticated tenant.",
-    409: "The Idempotency-Key was already used with a different request body.",
+    409: "The Idempotency-Key was already used with a different request body, or the "
+    "target resource isn't in a state that allows this action.",
     422: "Request body/query failed validation, or a cursor was malformed.",
+    429: "The tenant's rate-limit budget is exhausted; retry after the value (seconds) "
+    "in the Retry-After response header.",
 }
 
 

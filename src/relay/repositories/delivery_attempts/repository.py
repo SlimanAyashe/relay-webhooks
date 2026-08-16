@@ -1,5 +1,6 @@
 import uuid
 
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from relay.domain.delivery_attempts import AttemptErrorClass, DeliveryAttempt
@@ -52,3 +53,15 @@ class DeliveryAttemptRepository:
         await self._session.flush()
         await self._session.refresh(model)
         return _to_domain(model)
+
+    async def list_for_delivery(self, delivery_id: uuid.UUID) -> list[DeliveryAttempt]:
+        """The full attempt history for one delivery, oldest first -- spans every replay
+        chain (see DeliveryRepository.reset_for_replay), since attempts are never deleted
+        or rewritten.
+        """
+        result = await self._session.execute(
+            select(DeliveryAttemptModel)
+            .where(DeliveryAttemptModel.delivery_id == delivery_id)
+            .order_by(DeliveryAttemptModel.created_at, DeliveryAttemptModel.attempt_no)
+        )
+        return [_to_domain(model) for model in result.scalars()]

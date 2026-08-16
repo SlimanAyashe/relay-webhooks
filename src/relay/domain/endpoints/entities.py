@@ -26,6 +26,7 @@ class Endpoint:
     status: EndpointStatus = EndpointStatus.ACTIVE
     breaker_state: BreakerState = BreakerState.CLOSED
     opened_at: datetime | None = None
+    consecutive_failures: int = 0
 
     def is_active(self) -> bool:
         return self.status is EndpointStatus.ACTIVE

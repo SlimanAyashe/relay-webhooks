@@ -1,4 +1,5 @@
 import logging
+import math
 import uuid
 from typing import cast
 
@@ -7,7 +8,14 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
-from relay.domain.errors import ConflictError, DomainError, NotFoundError, ValidationError
+from relay.domain.errors import (
+    ConflictError,
+    DomainError,
+    NotFoundError,
+    RateLimitExceeded,
+    SsrfBlocked,
+    ValidationError,
+)
 
 logger = logging.getLogger("relay.errors")
 
@@ -19,6 +27,7 @@ _TYPE_BY_STATUS: dict[int, str] = {
     status.HTTP_404_NOT_FOUND: "/problems/not-found",
     status.HTTP_409_CONFLICT: "/problems/conflict",
     status.HTTP_422_UNPROCESSABLE_CONTENT: "/problems/validation-error",
+    status.HTTP_429_TOO_MANY_REQUESTS: "/problems/rate-limited",
     status.HTTP_500_INTERNAL_SERVER_ERROR: "/problems/internal-error",
 }
 
@@ -28,14 +37,19 @@ _TITLE_BY_STATUS: dict[int, str] = {
     status.HTTP_404_NOT_FOUND: "Not Found",
     status.HTTP_409_CONFLICT: "Conflict",
     status.HTTP_422_UNPROCESSABLE_CONTENT: "Validation Error",
+    status.HTTP_429_TOO_MANY_REQUESTS: "Too Many Requests",
     status.HTTP_500_INTERNAL_SERVER_ERROR: "Internal Server Error",
 }
 
 # relay.domain.errors carries no HTTP knowledge (by design -- see that module); this is
-# the one place that maps its typed exceptions onto status codes.
+# the one place that maps its typed exceptions onto status codes. RateLimitExceeded is
+# handled separately below (not in this list) since it needs a Retry-After header, not
+# just a status code. SsrfBlocked is mapped here for completeness of the hierarchy even
+# though nothing currently raises it across the API boundary -- see its docstring.
 _DOMAIN_ERROR_STATUS: list[tuple[type[DomainError], int]] = [
     (NotFoundError, status.HTTP_404_NOT_FOUND),
     (ConflictError, status.HTTP_409_CONFLICT),
+    (SsrfBlocked, status.HTTP_422_UNPROCESSABLE_CONTENT),
     (ValidationError, status.HTTP_422_UNPROCESSABLE_CONTENT),
 ]
 
@@ -44,10 +58,17 @@ def _trace_id(request: Request) -> str:
     return getattr(request.state, "trace_id", None) or str(uuid.uuid4())
 
 
-def _problem_response(request: Request, status_code: int, detail: object) -> JSONResponse:
+def _problem_response(
+    request: Request,
+    status_code: int,
+    detail: object,
+    *,
+    headers: dict[str, str] | None = None,
+) -> JSONResponse:
     return JSONResponse(
         status_code=status_code,
         media_type=PROBLEM_MEDIA_TYPE,
+        headers=headers,
         content={
             "type": _TYPE_BY_STATUS.get(status_code, "about:blank"),
             "title": _TITLE_BY_STATUS.get(status_code, "Error"),
@@ -64,6 +85,16 @@ async def domain_error_handler(request: Request, exc: Exception) -> JSONResponse
     # regardless of the specific class registered; cast() narrows for mypy since this is
     # only ever invoked for a DomainError (that's what it's registered against below).
     domain_exc = cast(DomainError, exc)
+    if isinstance(domain_exc, RateLimitExceeded):
+        # Round up, never down -- a Retry-After that's a fraction of a second too short
+        # just invites the caller to be rejected again immediately.
+        retry_after = max(1, math.ceil(domain_exc.retry_after_seconds))
+        return _problem_response(
+            request,
+            status.HTTP_429_TOO_MANY_REQUESTS,
+            str(domain_exc),
+            headers={"Retry-After": str(retry_after)},
+        )
     for error_type, status_code in _DOMAIN_ERROR_STATUS:
         if isinstance(domain_exc, error_type):
             return _problem_response(request, status_code, str(domain_exc))

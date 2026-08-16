@@ -1,14 +1,24 @@
+import asyncio
 import time
 from dataclasses import dataclass
 from typing import Protocol
+from urllib.parse import urljoin
 
 import httpx
 
 from relay.domain.delivery_attempts import AttemptErrorClass
+from relay.infra.pinned_transport import PinnedAsyncTransport
+from relay.infra.settings import get_settings
+from relay.infra.ssrf_guard import Resolver, check_url, default_resolver
 
 RESPONSE_SNIPPET_MAX_LEN = 2048
 DEFAULT_CONNECT_TIMEOUT_SECONDS = 5.0
 DEFAULT_READ_TIMEOUT_SECONDS = 10.0
+
+# How many redirect hops to follow, each re-validated by the SSRF guard before connecting.
+# httpx.AsyncClient defaults to follow_redirects=False, and this adapter also passes it
+# explicitly per-request -- redirects are always handled by this loop, never by httpx.
+MAX_REDIRECT_HOPS = 3
 
 
 @dataclass(frozen=True, slots=True)
@@ -30,8 +40,8 @@ class OutboundHttpResult:
 class OutboundHttpSender(Protocol):
     """Port for sending one outbound delivery attempt. DeliveryAttemptService depends on
     this, not on httpx directly, so tests can substitute a fake adapter without any real
-    network traffic. Phase 3 adds the SSRF-resistant, DNS-pinned adapter; this port doesn't
-    change shape when that lands.
+    network traffic. The real adapter (HttpxOutboundSender) is SSRF-guarded and IP-pinned;
+    that's entirely internal to the adapter, so this port's shape never had to change for it.
     """
 
     async def send(
@@ -40,9 +50,16 @@ class OutboundHttpSender(Protocol):
 
 
 class HttpxOutboundSender:
-    """Real adapter: a persistent httpx.AsyncClient with explicit connect/read timeouts.
-    Classifies timeouts and connection failures into AttemptErrorClass here so
-    DeliveryAttemptService never has to know about httpx's exception hierarchy.
+    """Real adapter. Every send() call -- including retries and redirect hops -- runs the
+    SSRF guard first and connects only to the address it validated, via a fresh
+    IP-pinned transport per hop (see relay.infra.pinned_transport). A blocked destination
+    never reaches httpx at all; it's classified as AttemptErrorClass.SSRF_BLOCKED and
+    returned like any other non-2xx outcome, so DeliveryAttemptService doesn't need to know
+    SSRF is even a concept -- it just sees a failed attempt with a specific error class.
+
+    No persistent httpx.AsyncClient is kept across calls (Phase 2's adapter had one): the
+    transport differs per destination IP, so each send() opens a short-lived client scoped
+    to that one request (and its redirect hops).
     """
 
     def __init__(
@@ -50,42 +67,88 @@ class HttpxOutboundSender:
         *,
         connect_timeout: float = DEFAULT_CONNECT_TIMEOUT_SECONDS,
         read_timeout: float = DEFAULT_READ_TIMEOUT_SECONDS,
+        allowed_ports: frozenset[int] | None = None,
+        resolver: Resolver = default_resolver,
     ) -> None:
-        timeout = httpx.Timeout(
+        self._timeout = httpx.Timeout(
             connect=connect_timeout, read=read_timeout, write=read_timeout, pool=connect_timeout
         )
-        self._client = httpx.AsyncClient(timeout=timeout)
+        self._allowed_ports = (
+            allowed_ports if allowed_ports is not None else get_settings().ssrf_allowed_ports
+        )
+        self._resolver = resolver
 
     async def aclose(self) -> None:
-        await self._client.aclose()
+        """No persistent client to close -- kept as a no-op so worker shutdown code
+        (`await owned_sender.aclose()`) doesn't need to know this adapter changed shape.
+        """
 
     async def send(
         self, *, url: str, payload: bytes, headers: dict[str, str]
     ) -> OutboundHttpResult:
         start = time.monotonic()
-        try:
-            response = await self._client.post(url, content=payload, headers=headers)
-        except httpx.TimeoutException:
-            return OutboundHttpResult(
-                latency_ms=_elapsed_ms(start), error_class=AttemptErrorClass.TIMEOUT
+        current_url = url
+
+        for hop in range(MAX_REDIRECT_HOPS + 1):
+            check = await asyncio.to_thread(
+                check_url, current_url, allowed_ports=self._allowed_ports, resolver=self._resolver
             )
-        except httpx.HTTPError:
+            if not check.allowed:
+                return OutboundHttpResult(
+                    latency_ms=_elapsed_ms(start),
+                    error_class=AttemptErrorClass.SSRF_BLOCKED,
+                    response_snippet=check.reason,
+                )
+            assert check.hostname is not None and check.resolved_ip is not None
+
+            transport = PinnedAsyncTransport(
+                pinned_ip=check.resolved_ip, original_host=check.hostname
+            )
+            try:
+                async with httpx.AsyncClient(transport=transport, timeout=self._timeout) as client:
+                    response = await client.post(
+                        current_url, content=payload, headers=headers, follow_redirects=False
+                    )
+            except httpx.TimeoutException:
+                return OutboundHttpResult(
+                    latency_ms=_elapsed_ms(start), error_class=AttemptErrorClass.TIMEOUT
+                )
+            except httpx.HTTPError:
+                return OutboundHttpResult(
+                    latency_ms=_elapsed_ms(start), error_class=AttemptErrorClass.CONNECTION_ERROR
+                )
+
+            location = response.headers.get("location")
+            if 300 <= response.status_code < 400 and location:
+                if hop == MAX_REDIRECT_HOPS:
+                    return OutboundHttpResult(
+                        latency_ms=_elapsed_ms(start),
+                        status_code=response.status_code,
+                        error_class=AttemptErrorClass.HTTP_ERROR,
+                        response_snippet=f"redirect budget exceeded at {location!r}",
+                    )
+                # Re-validated on the very next loop iteration -- a redirect to a forbidden
+                # IP is blocked before any connection to it is ever attempted.
+                current_url = urljoin(current_url, location)
+                continue
+
+            latency_ms = _elapsed_ms(start)
+            snippet = response.text[:RESPONSE_SNIPPET_MAX_LEN]
+            if 200 <= response.status_code < 300:
+                return OutboundHttpResult(
+                    latency_ms=latency_ms,
+                    status_code=response.status_code,
+                    response_snippet=snippet,
+                )
             return OutboundHttpResult(
-                latency_ms=_elapsed_ms(start), error_class=AttemptErrorClass.CONNECTION_ERROR
+                latency_ms=latency_ms,
+                status_code=response.status_code,
+                error_class=AttemptErrorClass.HTTP_ERROR,
+                response_snippet=snippet,
             )
 
-        latency_ms = _elapsed_ms(start)
-        snippet = response.text[:RESPONSE_SNIPPET_MAX_LEN]
-        if 200 <= response.status_code < 300:
-            return OutboundHttpResult(
-                latency_ms=latency_ms, status_code=response.status_code, response_snippet=snippet
-            )
-        return OutboundHttpResult(
-            latency_ms=latency_ms,
-            status_code=response.status_code,
-            error_class=AttemptErrorClass.HTTP_ERROR,
-            response_snippet=snippet,
-        )
+        # Unreachable: the loop above always returns by hop == MAX_REDIRECT_HOPS.
+        raise AssertionError("unreachable")  # pragma: no cover
 
 
 def _elapsed_ms(start: float) -> int:

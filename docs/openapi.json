@@ -1,6 +1,17 @@
 {
   "components": {
     "schemas": {
+      "AttemptErrorClass": {
+        "description": "Populated only on a non-success attempt; `None` on the domain entity means the\nattempt succeeded (2xx) -- kept as an enum rather than a free-text column so a\ndownstream consumer of delivery_attempts (a dashboard, a query) can rely on a closed\nset of values instead of parsing arbitrary exception strings.",
+        "enum": [
+          "http_error",
+          "timeout",
+          "connection_error",
+          "ssrf_blocked"
+        ],
+        "title": "AttemptErrorClass",
+        "type": "string"
+      },
       "BreakerState": {
         "enum": [
           "closed",
@@ -9,6 +20,230 @@
         ],
         "title": "BreakerState",
         "type": "string"
+      },
+      "DeadDeliveryRead": {
+        "description": "A dead delivery (retry budget exhausted) with its full attempt history attached,\nso a caller doesn't need a second request per delivery to see why it died.",
+        "properties": {
+          "attempt_count": {
+            "title": "Attempt Count",
+            "type": "integer"
+          },
+          "attempts": {
+            "items": {
+              "$ref": "#/components/schemas/DeliveryAttemptRead"
+            },
+            "title": "Attempts",
+            "type": "array"
+          },
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "endpoint_id": {
+            "format": "uuid",
+            "title": "Endpoint Id",
+            "type": "string"
+          },
+          "event_id": {
+            "format": "uuid",
+            "title": "Event Id",
+            "type": "string"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "state": {
+            "$ref": "#/components/schemas/DeliveryState"
+          }
+        },
+        "required": [
+          "id",
+          "event_id",
+          "endpoint_id",
+          "state",
+          "attempt_count",
+          "created_at",
+          "attempts"
+        ],
+        "title": "DeadDeliveryRead",
+        "type": "object"
+      },
+      "DeliveryAttemptRead": {
+        "properties": {
+          "attempt_no": {
+            "title": "Attempt No",
+            "type": "integer"
+          },
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "error_class": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/AttemptErrorClass"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "latency_ms": {
+            "title": "Latency Ms",
+            "type": "integer"
+          },
+          "request_snippet": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Request Snippet"
+          },
+          "response_snippet": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Response Snippet"
+          },
+          "response_status": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Response Status"
+          }
+        },
+        "required": [
+          "id",
+          "attempt_no",
+          "latency_ms",
+          "response_status",
+          "error_class",
+          "request_snippet",
+          "response_snippet",
+          "created_at"
+        ],
+        "title": "DeliveryAttemptRead",
+        "type": "object"
+      },
+      "DeliveryRead": {
+        "properties": {
+          "attempt_count": {
+            "title": "Attempt Count",
+            "type": "integer"
+          },
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "endpoint_id": {
+            "format": "uuid",
+            "title": "Endpoint Id",
+            "type": "string"
+          },
+          "event_id": {
+            "format": "uuid",
+            "title": "Event Id",
+            "type": "string"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "next_retry_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Next Retry At"
+          },
+          "state": {
+            "$ref": "#/components/schemas/DeliveryState"
+          }
+        },
+        "required": [
+          "id",
+          "event_id",
+          "endpoint_id",
+          "state",
+          "attempt_count",
+          "next_retry_at",
+          "created_at"
+        ],
+        "title": "DeliveryRead",
+        "type": "object"
+      },
+      "DeliveryState": {
+        "enum": [
+          "pending",
+          "delivered",
+          "retrying",
+          "dead"
+        ],
+        "title": "DeliveryState",
+        "type": "string"
+      },
+      "DlqListResponse": {
+        "properties": {
+          "has_more": {
+            "title": "Has More",
+            "type": "boolean"
+          },
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/DeadDeliveryRead"
+            },
+            "title": "Items",
+            "type": "array"
+          },
+          "next_cursor": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Next Cursor"
+          }
+        },
+        "required": [
+          "items",
+          "next_cursor",
+          "has_more"
+        ],
+        "title": "DlqListResponse",
+        "type": "object"
       },
       "EndpointCreate": {
         "additionalProperties": false,
@@ -412,6 +647,226 @@
         "summary": "Readyz",
         "tags": [
           "health"
+        ]
+      }
+    },
+    "/v1/deliveries/{delivery_id}/replay": {
+      "post": {
+        "description": "Starts a fresh delivery chain for a delivery whose retry budget was exhausted (state=dead): resets it to pending with a full retry budget and re-enqueues it. The original attempt history is never modified and stays queryable via GET /v1/dlq. 404 if the delivery doesn't exist or doesn't belong to the authenticated tenant; 409 if it isn't currently dead.",
+        "operationId": "replay_delivery_v1_deliveries__delivery_id__replay_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "delivery_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Delivery Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DeliveryRead"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {
+                "example": {
+                  "detail": "missing or invalid API key",
+                  "instance": "/v1/endpoints",
+                  "status": 401,
+                  "title": "Unauthorized",
+                  "trace_id": "b3f1c2a4-5e6d-4f7a-8b9c-0d1e2f3a4b5c",
+                  "type": "/problems/unauthorized"
+                }
+              }
+            },
+            "description": "Missing, malformed, unknown, or revoked API key."
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {
+                "example": {
+                  "detail": "insufficient scope",
+                  "instance": "/v1/endpoints",
+                  "status": 403,
+                  "title": "Forbidden",
+                  "trace_id": "b3f1c2a4-5e6d-4f7a-8b9c-0d1e2f3a4b5c",
+                  "type": "/problems/forbidden"
+                }
+              }
+            },
+            "description": "A valid key that lacks the scope this endpoint requires."
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {
+                "example": {
+                  "detail": "endpoint not found for tenant ...",
+                  "instance": "/v1/endpoints/2b1b1b1b-1b1b-1b1b-1b1b-1b1b1b1b1b1b",
+                  "status": 404,
+                  "title": "Not Found",
+                  "trace_id": "b3f1c2a4-5e6d-4f7a-8b9c-0d1e2f3a4b5c",
+                  "type": "/problems/not-found"
+                }
+              }
+            },
+            "description": "No resource with this id belongs to the authenticated tenant."
+          },
+          "409": {
+            "content": {
+              "application/problem+json": {
+                "example": {
+                  "detail": "idempotency key reused with a differing body for tenant ...",
+                  "instance": "/v1/events",
+                  "status": 409,
+                  "title": "Conflict",
+                  "trace_id": "b3f1c2a4-5e6d-4f7a-8b9c-0d1e2f3a4b5c",
+                  "type": "/problems/conflict"
+                }
+              }
+            },
+            "description": "The Idempotency-Key was already used with a different request body, or the target resource isn't in a state that allows this action."
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "APIKeyHeader": []
+          }
+        ],
+        "summary": "Replay a dead delivery",
+        "tags": [
+          "deliveries"
+        ]
+      }
+    },
+    "/v1/dlq": {
+      "get": {
+        "description": "Cursor-paginated list of the tenant's dead-lettered deliveries (retry budget exhausted), each with its full attempt history attached. Replay one via POST /v1/deliveries/{id}/replay.",
+        "operationId": "list_dead_deliveries_v1_dlq_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "cursor",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Cursor"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 50,
+              "maximum": 200,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DlqListResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {
+                "example": {
+                  "detail": "missing or invalid API key",
+                  "instance": "/v1/endpoints",
+                  "status": 401,
+                  "title": "Unauthorized",
+                  "trace_id": "b3f1c2a4-5e6d-4f7a-8b9c-0d1e2f3a4b5c",
+                  "type": "/problems/unauthorized"
+                }
+              }
+            },
+            "description": "Missing, malformed, unknown, or revoked API key."
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {
+                "example": {
+                  "detail": "insufficient scope",
+                  "instance": "/v1/endpoints",
+                  "status": 403,
+                  "title": "Forbidden",
+                  "trace_id": "b3f1c2a4-5e6d-4f7a-8b9c-0d1e2f3a4b5c",
+                  "type": "/problems/forbidden"
+                }
+              }
+            },
+            "description": "A valid key that lacks the scope this endpoint requires."
+          },
+          "422": {
+            "content": {
+              "application/problem+json": {
+                "example": {
+                  "detail": [
+                    {
+                      "loc": [
+                        "body",
+                        "subscribed_event_types"
+                      ],
+                      "msg": "Field required",
+                      "type": "missing"
+                    }
+                  ],
+                  "instance": "/v1/endpoints",
+                  "status": 422,
+                  "title": "Validation Error",
+                  "trace_id": "b3f1c2a4-5e6d-4f7a-8b9c-0d1e2f3a4b5c",
+                  "type": "/problems/validation-error"
+                }
+              }
+            },
+            "description": "Request body/query failed validation, or a cursor was malformed."
+          }
+        },
+        "security": [
+          {
+            "APIKeyHeader": []
+          }
+        ],
+        "summary": "List dead deliveries",
+        "tags": [
+          "dlq"
         ]
       }
     },
@@ -910,7 +1365,7 @@
     },
     "/v1/events": {
       "post": {
-        "description": "Accepts an event for delivery to every endpoint subscribed to its type. Idempotency-Key is required: the same key with an identical body replays the original event (same 202, same event back); with a differing body it's a 409.",
+        "description": "Accepts an event for delivery to every endpoint subscribed to its type. Idempotency-Key is required: the same key with an identical body replays the original event (same 202, same event back); with a differing body it's a 409. Subject to a per-tenant rate limit; exceeding it returns 429 with Retry-After.",
         "operationId": "ingest_event_v1_events_post",
         "parameters": [
           {
@@ -992,7 +1447,7 @@
                 }
               }
             },
-            "description": "The Idempotency-Key was already used with a different request body."
+            "description": "The Idempotency-Key was already used with a different request body, or the target resource isn't in a state that allows this action."
           },
           "422": {
             "content": {
@@ -1017,6 +1472,21 @@
               }
             },
             "description": "Request body/query failed validation, or a cursor was malformed."
+          },
+          "429": {
+            "content": {
+              "application/problem+json": {
+                "example": {
+                  "detail": "rate limit exceeded, retry after 1.00s",
+                  "instance": "/v1/events",
+                  "status": 429,
+                  "title": "Too Many Requests",
+                  "trace_id": "b3f1c2a4-5e6d-4f7a-8b9c-0d1e2f3a4b5c",
+                  "type": "/problems/rate-limited"
+                }
+              }
+            },
+            "description": "The tenant's rate-limit budget is exhausted; retry after the value (seconds) in the Retry-After response header."
           }
         },
         "security": [

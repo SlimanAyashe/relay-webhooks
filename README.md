@@ -6,9 +6,14 @@ backoff, per-endpoint circuit breakers, and a replayable dead-letter queue.
 
 See [RELAY-PLAN.md](../RELAY-PLAN.md) for the full architecture and build phases.
 
-**Status: Phase 0 — skeleton.** Right now this is a booting FastAPI app wired to Postgres and
-Redis with `/healthz` and `/readyz`, real CI, and a hardened Docker image — no event ingest or
-delivery engine yet. That lands in Phases 1–2.
+**Status:** Phases 0–3 (skeleton, API/domain, delivery engine, security & resilience) are
+complete in code; see [docs/PROJECT_STATUS.md](docs/PROJECT_STATUS.md) for what's deployed
+right now versus what's only landed on `main`.
+
+See [docs/guarantees.md](docs/guarantees.md) for what this system promises — and exactly
+where each promise stops — and [docs/failure-modes.md](docs/failure-modes.md) for the
+running "if it dies here, then what, and which test proves it" log behind those promises.
+[docs/runbook.md](docs/runbook.md) covers deploy, rollback, and DLQ replay.
 
 ## Architecture (current)
 
@@ -63,11 +68,16 @@ docker build -f docker/Dockerfile -t relay:latest .
 
 Final image size: **315MB** (`python:3.12-slim` base).
 
-## Known limitations (Phase 0)
+## Known limitations
 
-- No event ingest, delivery engine, signing, or SSRF guard yet — Phase 0 only proves the skeleton
-  deploys; see [RELAY-PLAN.md](../RELAY-PLAN.md) for what's next.
-- CI workflow (`.github/workflows/ci.yml`) is written and locally validated but has not yet run
-  against a live GitHub Actions runner — that requires pushing this repo to GitHub.
-- Production deploy is tag-triggered (`vX.Y.Z`) and not yet exercised end-to-end — see
-  `docs/PROJECT_STATUS.md` for current status.
+See [docs/guarantees.md](docs/guarantees.md)'s "Not guaranteed" section and
+[RELAY-PLAN.md](../RELAY-PLAN.md)'s scope-discipline notes for the full, honest list
+(no ordering, no global fairness, DNS rebinding mitigated but not eliminated, etc.). A few
+worth calling out here specifically:
+
+- No public demo console yet ("Delivery Theater") — that's Phase 4, still ahead.
+- No nightly backup/restore — Phase 5 (optional) scope, not yet started.
+- The VPS egress firewall rules documented in `docs/runbook.md` as defense-in-depth behind
+  the application-layer SSRF guard have not been applied to the production VPS yet (it's
+  shared with other pre-existing services, so this needs deliberate coordination, not
+  unilateral automation).
