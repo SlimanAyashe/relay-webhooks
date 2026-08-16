@@ -29,10 +29,16 @@ jobs:
           chmod 600 ~/.ssh/deploy_key
           ssh-keyscan -H "${{ secrets.DEPLOY_HOST }}" >> ~/.ssh/known_hosts
 
-      - name: Copy deploy script to VPS
+      # Both files are copied on every deploy, not just when they change --
+      # compose.prod.yml previously only got onto the VPS via one-off manual
+      # provisioning, so it silently fell behind the repo (e.g. missing the
+      # Phase 2 worker services) until a deploy broke on "no such service".
+      - name: Copy deploy script and compose file to VPS
         run: |
           scp -i ~/.ssh/deploy_key scripts/deploy_remote.sh \
             "${{ secrets.DEPLOY_USER }}@${{ secrets.DEPLOY_HOST }}:/opt/relay/deploy_remote.sh"
+          scp -i ~/.ssh/deploy_key docker/compose.prod.yml \
+            "${{ secrets.DEPLOY_USER }}@${{ secrets.DEPLOY_HOST }}:/opt/relay/docker/compose.prod.yml"
 
       - name: Run health-gated deploy
         run: |
