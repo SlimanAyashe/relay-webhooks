@@ -14,11 +14,16 @@ ask whoever's driving the project for it if you need the full spec beyond what's
 
 ## Current status
 
-Phase 0 (skeleton), Phase 1 (API and domain), and Phase 2 (the delivery engine) are all complete
-in code and now **deployed to production** as `v0.1.7` — `api`, `relay-worker`, `dispatcher`,
+Phase 0 (skeleton), Phase 1 (API and domain), and Phase 2 (the delivery engine) are complete in
+code and **deployed to production** as `v0.1.7` — `api`, `relay-worker`, `dispatcher`,
 `scheduler`, and `reaper` all running, `/readyz` green (Postgres + Redis both `ok`). See "Phase 1
 deploy, 2026-08-15/16" under Phase 2 below for what the deploy actually took (three unrelated
 bugs, none of them in the application code).
+
+Phase 3 (security and resilience — HMAC signing, the SSRF guard incl. the IP-pinned transport,
+per-endpoint circuit breaker, DLQ + replay endpoint, per-tenant rate limiting) is **complete in
+code on `feat/phase-3-security-resilience`, not yet merged to `main` or deployed**. See "Phase 3
+— security and resilience" below for what's built and what's deliberately deferred.
 
 ## Phase 0 — skeleton (complete, deployed)
 
@@ -264,9 +269,75 @@ rounds to reach a green `/readyz`, none of them application bugs:
 None of the three would have been caught by CI — they're all VPS-state problems, invisible from
 the repo. Worth a skim before the next deploy in case any of the same drift has crept back.
 
+## Phase 3 — security and resilience (complete in code, not yet deployed)
+
+Phase 3's goal: turn Phase 2's delivery engine, which would call whatever URL an endpoint has
+with no signing and no breaker, into something safe to eventually put behind a public demo
+console — HMAC-signed payloads, an SSRF guard with a DNS-rebinding-resistant IP-pinned
+transport, a per-endpoint circuit breaker, a real DLQ (retry-budget exhaustion actually
+transitions a delivery to `dead`, and it's replayable), and per-tenant rate limiting.
+
+**Done:**
+- One new Alembic migration (`consecutive_failures` integer, default 0, on `endpoints` — the
+  breaker's failure count needed a durable, per-endpoint home); `breaker_state`/`opened_at`
+  already existed on that table from Phase 2's schema, unused until now
+- `relay.infra.signing`: pure HMAC-SHA256 signer/verifier (`sign()`/`verify()`, `hmac.compare_digest`,
+  a configurable replay-tolerance window), wired into `DeliveryAttemptService.attempt()` so every
+  outbound request carries `X-Relay-Signature`/`X-Relay-Timestamp`/`X-Relay-Delivery-Id`
+- `relay.infra.ssrf_guard` (post-resolution CIDR checks against loopback/RFC1918/link-local/CGNAT
+  (100.64.0.0/10)/IPv6 ULA/the cloud metadata IP, plus a port allow-list) and
+  `relay.infra.pinned_transport.PinnedAsyncTransport` (a custom httpx transport connecting
+  directly to the address the guard validated, preserving `Host` and TLS SNI) — both live inside
+  `HttpxOutboundSender`, which now runs the guard before every attempt and every redirect hop
+  (redirects are never auto-followed), classifying a blocked destination as
+  `AttemptErrorClass.SSRF_BLOCKED` rather than a generic connection failure
+- `relay.domain.endpoints.breaker`: pure closed/open/half-open transition logic (5 consecutive
+  failures to open by default, 60s cooldown, exactly one half-open probe), persisted atomically
+  alongside the delivery-attempt write via new `EndpointRepository.record_delivery_outcome()`/
+  `set_breaker_state()` methods so a concurrent breaker-state read is never stale; wired into
+  `DeliveryAttemptService.attempt()`, which skips the HTTP call entirely (and defers via the new
+  `DeliveryRepository.reschedule()`, which doesn't spend the delivery's retry-attempt budget)
+  while the breaker is open and cooling down
+- Retry-budget exhaustion is real: `DeliveryRepository.mark_dead()` transitions a delivery to
+  `DeliveryState.DEAD` once `attempt_count` reaches `settings.delivery_max_attempts` (8 by
+  default) instead of retrying forever
+- DLQ surfaced over HTTP: `GET /v1/dlq` (new `DeliveryRepository.list_dead()`, keyset-paginated,
+  scoped to tenant via a join through `events`) lists dead deliveries with their full attempt
+  history attached; `POST /v1/deliveries/{id}/replay` (new `ReplayService`) resets a dead
+  delivery to a fresh chain and re-publishes it to the Redis stream, leaving the original
+  `delivery_attempts` rows untouched and queryable
+- Redis-backed per-tenant token-bucket rate limiter (`relay.infra.rate_limit`, one atomic Lua
+  script per check, same correctness shape as the retry ZSET's pop-due script), wired into
+  `POST /v1/events`; a rejection raises the new `RateLimitExceeded` domain error, mapped to `429`
+  with a `Retry-After` header via an extended `_problem_response()` (now accepts arbitrary
+  headers, not just events-specific ones); `SsrfBlocked` also added to the domain error hierarchy
+  for completeness even though nothing currently raises it across the API boundary
+- Per-endpoint concurrency cap in the dispatcher: a lazily-created `asyncio.Semaphore` per
+  endpoint id (capacity 3 by default), so one slow-but-still-200 destination can't consume the
+  whole worker pool's concurrency budget even when the breaker hasn't tripped
+- `hypothesis` added as a dev dependency for the signing property tests (payload tampering,
+  timestamp-tolerance rejection); `tests/integration/test_http_sender_ssrf.py` covers the
+  redirect-to-forbidden-IP and DNS-rebinding scenarios with respx-mocked destinations and fake
+  resolvers, never real network I/O or real DNS
+- `docs/adr/0005-phase-3-security-resilience.md`, `docs/guarantees.md` (new), `docs/runbook.md`
+  (new — deploy/rollback/DLQ-drain plus the VPS egress-firewall rules documented as
+  defense-in-depth, not applied to any real infrastructure), and new rows in
+  `docs/failure-modes.md` for breaker trip/recovery, SSRF-blocked redirects, DNS rebinding,
+  rate-limit rejection, retry-budget exhaustion, and DLQ replay
+- 76 new tests (unit + integration via testcontainers, respx, freezegun, hypothesis), bringing the
+  suite to 238 total, all passing; `make lint`, `make typecheck`, `uv run lint-imports`, and
+  `uv run pip-audit` all clean
+
+**Not done in Phase 3** (by design, deferred): the VPS egress firewall rules are documented but
+not applied to the real, shared production VPS (see `docs/runbook.md` for why — that host is
+shared with other pre-existing services and touching its firewall state needs deliberate
+coordination, not something this repo's tooling should do unilaterally); no nightly backup/restore
+(Phase 5, optional); no demo console yet to actually exercise any of this publicly (Phase 4).
+
 ## What's next
 
-Phase 3 (HMAC signing, SSRF guard incl. the IP-pinned transport, circuit breaker, DLQ + replay
-endpoint, per-tenant rate limiting) → Phase 4 (the public demo console + the remaining
-failure-scenario tests — SSRF-blocked redirect, breaker open/half-open/closed, revoked/malformed
-API key — that prove the full guarantee set is real, not aspirational).
+Phase 4 (the public demo console + the remaining failure-scenario tests — revoked/malformed API
+key is already covered from Phase 1, so what's left is the console itself: mock receivers,
+sandbox provisioning, the SSE attempt timeline, signature verifier, breaker pill, DLQ replay UI,
+metrics strip, abuse controls) — the phase that makes everything Phase 3 built actually visible to
+someone who isn't reading the code.
