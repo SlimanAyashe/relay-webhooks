@@ -3,6 +3,8 @@ from collections.abc import Awaitable, Callable
 
 from fastapi.testclient import TestClient
 
+from relay.infra.settings import Settings, get_settings
+
 AuthHeaders = Callable[[frozenset[str]], Awaitable[tuple[uuid.UUID, dict[str, str]]]]
 
 
@@ -89,3 +91,73 @@ async def test_wrong_scope_returns_403(wired_client: TestClient, auth_headers: A
     )
 
     assert response.status_code == 403
+
+
+def _pin_small_rate_limit_budget(wired_client: TestClient, *, burst: int) -> None:
+    """Overrides Settings with a tiny burst and a near-zero refill rate, so the test
+    doesn't race real wall-clock token refill against however long `burst` HTTP round
+    trips (each a full event-ingest transaction) happen to take in this environment.
+    """
+    wired_client.app.dependency_overrides[get_settings] = lambda: Settings(  # type: ignore[attr-defined]
+        rate_limit_burst=burst, rate_limit_requests_per_second=0.001
+    )
+
+
+async def test_exceeding_the_rate_limit_returns_429_with_retry_after(
+    wired_client: TestClient, auth_headers: AuthHeaders
+) -> None:
+    """Testing scenario from the backlog: a tenant exceeding its configured rate gets 429
+    + Retry-After, and (below) a different tenant's budget is unaffected.
+    """
+    burst = 3
+    _pin_small_rate_limit_budget(wired_client, burst=burst)
+    _, headers = await auth_headers(frozenset({"*"}))
+
+    for i in range(burst):
+        response = wired_client.post(
+            "/v1/events",
+            json={"type": "order.created", "payload": {"i": i}},
+            headers={**headers, "Idempotency-Key": f"idem-{i}"},
+        )
+        assert response.status_code == 202, f"request {i} unexpectedly throttled"
+
+    throttled = wired_client.post(
+        "/v1/events",
+        json={"type": "order.created", "payload": {"i": "over-budget"}},
+        headers={**headers, "Idempotency-Key": "idem-over-budget"},
+    )
+
+    assert throttled.status_code == 429
+    assert "retry-after" in {k.lower() for k in throttled.headers}
+    assert int(throttled.headers["retry-after"]) >= 1
+    assert throttled.headers["content-type"] == "application/problem+json"
+
+
+async def test_rate_limit_is_isolated_per_tenant(
+    wired_client: TestClient, auth_headers: AuthHeaders
+) -> None:
+    burst = 3
+    _pin_small_rate_limit_budget(wired_client, burst=burst)
+    _, exhausted_headers = await auth_headers(frozenset({"*"}))
+    _, other_headers = await auth_headers(frozenset({"*"}))
+
+    for i in range(burst):
+        wired_client.post(
+            "/v1/events",
+            json={"type": "order.created", "payload": {}},
+            headers={**exhausted_headers, "Idempotency-Key": f"idem-{i}"},
+        )
+    throttled = wired_client.post(
+        "/v1/events",
+        json={"type": "order.created", "payload": {}},
+        headers={**exhausted_headers, "Idempotency-Key": "idem-over-budget"},
+    )
+    assert throttled.status_code == 429
+
+    # A different tenant's budget was never touched.
+    unaffected = wired_client.post(
+        "/v1/events",
+        json={"type": "order.created", "payload": {}},
+        headers={**other_headers, "Idempotency-Key": "idem-1"},
+    )
+    assert unaffected.status_code == 202
