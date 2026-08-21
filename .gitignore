@@ -36,3 +36,7 @@ Thumbs.db
 
 # Logs
 *.log
+
+# Load test scratch output (tests/load/README.md)
+tests/load/results/*
+!tests/load/results/.gitkeep
