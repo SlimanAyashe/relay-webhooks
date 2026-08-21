@@ -18,6 +18,7 @@ def _to_domain(model: ApiKeyModel) -> ApiKey:
         scopes=frozenset(model.scopes),
         created_at=model.created_at,
         revoked_at=model.revoked_at,
+        expires_at=model.expires_at,
     )
 
 
@@ -26,10 +27,20 @@ class ApiKeyRepository:
         self._session = session
 
     async def create(
-        self, tenant_id: uuid.UUID, key_hash: str, key_prefix: str, scopes: frozenset[str]
+        self,
+        tenant_id: uuid.UUID,
+        key_hash: str,
+        key_prefix: str,
+        scopes: frozenset[str],
+        *,
+        expires_at: datetime | None = None,
     ) -> ApiKey:
         model = ApiKeyModel(
-            tenant_id=tenant_id, key_hash=key_hash, key_prefix=key_prefix, scopes=list(scopes)
+            tenant_id=tenant_id,
+            key_hash=key_hash,
+            key_prefix=key_prefix,
+            scopes=list(scopes),
+            expires_at=expires_at,
         )
         self._session.add(model)
         await self._session.flush()

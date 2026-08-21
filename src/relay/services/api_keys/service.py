@@ -1,4 +1,5 @@
 import uuid
+from datetime import datetime
 
 from relay.domain.api_keys import ApiKey
 from relay.domain.api_keys.hashing import generate_api_key
@@ -10,14 +11,26 @@ class ApiKeyService:
     def __init__(self, uow: UnitOfWork) -> None:
         self._uow = uow
 
-    async def issue(self, tenant_id: uuid.UUID, scopes: frozenset[str]) -> tuple[ApiKey, str]:
+    async def issue(
+        self,
+        tenant_id: uuid.UUID,
+        scopes: frozenset[str],
+        *,
+        expires_at: datetime | None = None,
+    ) -> tuple[ApiKey, str]:
         """Returns (api_key, plaintext_key). The plaintext key is never persisted or
-        retrievable again after this call returns.
+        retrievable again after this call returns. `expires_at` is None for a normal
+        tenant's key (no expiry beyond explicit revocation); Phase 4's sandbox
+        provisioning (relay.services.sandbox.service) is the only caller that sets it.
         """
         plaintext_key, key_prefix, key_hash = generate_api_key()
         async with self._uow:
             api_key = await self._uow.api_keys.create(
-                tenant_id=tenant_id, key_hash=key_hash, key_prefix=key_prefix, scopes=scopes
+                tenant_id=tenant_id,
+                key_hash=key_hash,
+                key_prefix=key_prefix,
+                scopes=scopes,
+                expires_at=expires_at,
             )
             await self._uow.commit()
         return api_key, plaintext_key

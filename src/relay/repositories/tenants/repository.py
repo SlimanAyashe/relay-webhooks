@@ -13,6 +13,7 @@ def _to_domain(model: TenantModel) -> Tenant:
         name=model.name,
         created_at=model.created_at,
         deleted_at=model.deleted_at,
+        is_sandbox=model.is_sandbox,
     )
 
 
@@ -20,8 +21,8 @@ class TenantRepository:
     def __init__(self, session: AsyncSession) -> None:
         self._session = session
 
-    async def create(self, name: str) -> Tenant:
-        model = TenantModel(name=name)
+    async def create(self, name: str, *, is_sandbox: bool = False) -> Tenant:
+        model = TenantModel(name=name, is_sandbox=is_sandbox)
         self._session.add(model)
         await self._session.flush()
         await self._session.refresh(model)

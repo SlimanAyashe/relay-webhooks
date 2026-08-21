@@ -56,6 +56,30 @@ A delivery can only be replayed while it's `dead` (`409` otherwise), and only by
 tenant that owns it (`404` for any other tenant's key, same as every other resource --
 existence is never leaked across tenants).
 
+## Demo console abuse controls
+
+`POST /v1/sandbox` is the one route on this service that creates an identity for an
+unauthenticated caller, and the console it powers is a public outbound HTTP proxy by
+design (register a URL, Relay calls it). The controls, all in `relay.infra.settings.Settings`:
+
+| Control | Setting | Default |
+| --- | --- | --- |
+| Sandbox key TTL | `sandbox_ttl_minutes` | 60 |
+| Max endpoints per sandbox | `sandbox_max_endpoints` | 3 |
+| Max events per sandbox | `sandbox_max_events` | 20 |
+| Sandbox event-ingest rate | `sandbox_rate_limit_requests_per_second` / `_burst` | 1.0 req/s, burst 3 |
+| Per-IP sandbox creation rate | `sandbox_creation_rate_limit_requests_per_second` / `_burst` | ~1 per 20s, burst 3 |
+| Max event payload size | `event_payload_max_bytes` | 64 KiB |
+| Outbound connect/read timeout | `outbound_connect_timeout_seconds` / `outbound_read_timeout_seconds` | 5s each |
+| Process-wide outbound concurrency | `dispatcher_concurrency` (Phase 2, not console-specific) | 10 |
+
+If the sandbox is being abused (scripted key farming past the per-IP limiter, e.g. from a
+botnet of IPs), the fastest containment is dropping `sandbox_creation_rate_limit_burst`
+and `_requests_per_second` via an env var redeploy -- no code change needed. A fixed,
+identifying `User-Agent` (`outbound_user_agent` setting) is sent on every outbound
+delivery request specifically so an abuse report against a customer's server names this
+service and a docs URL, and is answerable.
+
 ## Defense in depth: VPS egress firewall
 
 The application-layer SSRF guard (`relay.infra.ssrf_guard`, IP-pinned via

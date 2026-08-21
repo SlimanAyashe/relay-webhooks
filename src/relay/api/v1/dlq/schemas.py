@@ -16,6 +16,7 @@ class DeliveryAttemptRead(BaseModel):
     error_class: AttemptErrorClass | None
     request_snippet: str | None
     response_snippet: str | None
+    request_headers: dict[str, str] | None
     created_at: datetime
 
     @classmethod
@@ -28,6 +29,7 @@ class DeliveryAttemptRead(BaseModel):
             error_class=attempt.error_class,
             request_snippet=attempt.request_snippet,
             response_snippet=attempt.response_snippet,
+            request_headers=attempt.request_headers,
             created_at=attempt.created_at,
         )
 

@@ -11,13 +11,29 @@ from relay.api.v1.endpoints.schemas import (
     EndpointRead,
     EndpointUpdate,
 )
+from relay.infra.settings import Settings, get_settings
 from relay.repositories.unit_of_work import UnitOfWork, get_unit_of_work
 from relay.services.endpoints.service import EndpointService
+from relay.services.sandbox.service import SandboxService
 
 router = APIRouter(prefix="/v1/endpoints", tags=["endpoints"])
 
 _require_read = require_scope("endpoints:read")
 _require_write = require_scope("endpoints:write")
+
+
+async def _quota_checked_write_auth(
+    auth: AuthContext = Depends(_require_write),
+    uow: UnitOfWork = Depends(get_unit_of_work),
+    settings: Settings = Depends(get_settings),
+) -> AuthContext:
+    """Runs after authentication and before endpoint creation, enforcing the Phase 4
+    sandbox's hard-capped endpoint count -- a no-op for a normal (non-sandbox) tenant.
+    Reuses the same `uow` the handler itself receives (FastAPI caches Depends(get_unit_of_work)
+    per request), so this is one extra small read, not a second database connection.
+    """
+    await SandboxService(uow, settings=settings).assert_endpoint_quota(auth.tenant)
+    return auth
 
 
 @router.post(
@@ -28,12 +44,14 @@ _require_write = require_scope("endpoints:write")
     summary="Register a new endpoint",
     description=(
         "Registers a webhook endpoint for the authenticated tenant. The response "
-        "includes the HMAC signing secret -- the only time it's ever returned."
+        "includes the HMAC signing secret -- the only time it's ever returned. A "
+        "sandbox tenant is capped at a small fixed number of endpoints (403 once "
+        "exceeded); a normal tenant has no such cap."
     ),
 )
 async def create_endpoint(
     body: EndpointCreate,
-    auth: AuthContext = Depends(_require_write),
+    auth: AuthContext = Depends(_quota_checked_write_auth),
     uow: UnitOfWork = Depends(get_unit_of_work),
 ) -> EndpointCreated:
     service = EndpointService(uow)

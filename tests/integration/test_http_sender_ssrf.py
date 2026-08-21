@@ -11,6 +11,7 @@ import respx
 
 from relay.domain.delivery_attempts import AttemptErrorClass
 from relay.infra.http_sender import HttpxOutboundSender
+from relay.infra.settings import get_settings
 from relay.infra.ssrf_guard import Resolver
 
 _PUBLIC_IP = "93.184.216.34"
@@ -141,6 +142,58 @@ async def test_redirect_to_an_allowed_destination_is_followed_and_revalidated() 
     assert result.succeeded
     assert first_hop.call_count == 1
     assert second_hop.call_count == 1
+
+
+@respx.mock
+async def test_default_timeouts_and_user_agent_come_from_settings() -> None:
+    """Phase 4: HttpxOutboundSender's connect/read timeouts and User-Agent default to
+    Settings values (tightened from Phase 2/3's hardcoded 10s so the demo console's
+    `slow-8s` mock reliably demonstrates the timeout path -- see
+    docs/adr/0006-phase-4-demo-console.md) rather than module constants, and every
+    outbound request carries the fixed, identifying User-Agent so an abuse report is
+    traceable back to this service.
+    """
+    settings = get_settings()
+    captured: dict[str, object] = {}
+
+    def _capture(request: httpx.Request) -> httpx.Response:
+        captured["user_agent"] = request.headers.get("user-agent")
+        return httpx.Response(200, text="ok")
+
+    respx.post(f"https://{_PUBLIC_IP}/webhook").mock(side_effect=_capture)
+    resolver = _map_resolver({"ua.example.com": [_PUBLIC_IP]})
+    sender = HttpxOutboundSender(resolver=resolver)
+
+    assert sender._timeout.connect == settings.outbound_connect_timeout_seconds
+    assert sender._timeout.read == settings.outbound_read_timeout_seconds
+
+    result = await sender.send(url="https://ua.example.com/webhook", payload=b"{}", headers={})
+    await sender.aclose()
+
+    assert result.succeeded
+    assert captured["user_agent"] == settings.outbound_user_agent
+
+
+@respx.mock
+async def test_caller_supplied_headers_take_precedence_over_default_user_agent() -> None:
+    captured: dict[str, object] = {}
+
+    def _capture(request: httpx.Request) -> httpx.Response:
+        captured["user_agent"] = request.headers.get("user-agent")
+        return httpx.Response(200, text="ok")
+
+    respx.post(f"https://{_PUBLIC_IP}/webhook").mock(side_effect=_capture)
+    resolver = _map_resolver({"ua2.example.com": [_PUBLIC_IP]})
+    sender = HttpxOutboundSender(resolver=resolver)
+
+    await sender.send(
+        url="https://ua2.example.com/webhook",
+        payload=b"{}",
+        headers={"User-Agent": "custom-caller-agent"},
+    )
+    await sender.aclose()
+
+    assert captured["user_agent"] == "custom-caller-agent"
 
 
 @respx.mock

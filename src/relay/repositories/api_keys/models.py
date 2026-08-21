@@ -21,6 +21,7 @@ class ApiKeyModel(Base):
     key_prefix: Mapped[str] = mapped_column(String, nullable=False, index=True)
     scopes: Mapped[list[str]] = mapped_column(ARRAY(String), nullable=False)
     revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()
     )

@@ -101,6 +101,20 @@
             "title": "Latency Ms",
             "type": "integer"
           },
+          "request_headers": {
+            "anyOf": [
+              {
+                "additionalProperties": {
+                  "type": "string"
+                },
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Request Headers"
+          },
           "request_snippet": {
             "anyOf": [
               {
@@ -143,6 +157,7 @@
           "error_class",
           "request_snippet",
           "response_snippet",
+          "request_headers",
           "created_at"
         ],
         "title": "DeliveryAttemptRead",
@@ -546,6 +561,166 @@
         "title": "HTTPValidationError",
         "type": "object"
       },
+      "MetricsRead": {
+        "properties": {
+          "in_flight": {
+            "title": "In Flight",
+            "type": "integer"
+          },
+          "p95_latency_ms": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "P95 Latency Ms"
+          },
+          "queue_depth": {
+            "title": "Queue Depth",
+            "type": "integer"
+          },
+          "sample_size": {
+            "title": "Sample Size",
+            "type": "integer"
+          },
+          "success_rate": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Success Rate"
+          }
+        },
+        "required": [
+          "queue_depth",
+          "in_flight",
+          "p95_latency_ms",
+          "success_rate",
+          "sample_size"
+        ],
+        "title": "MetricsRead",
+        "type": "object"
+      },
+      "SandboxCreated": {
+        "description": "Returned exactly once, at provisioning -- the only time the plaintext API key is\never available, same rule as EndpointCreated.secret.",
+        "properties": {
+          "api_key": {
+            "title": "Api Key",
+            "type": "string"
+          },
+          "expires_at": {
+            "format": "date-time",
+            "title": "Expires At",
+            "type": "string"
+          },
+          "quotas": {
+            "$ref": "#/components/schemas/SandboxQuotasRead"
+          },
+          "tenant_id": {
+            "format": "uuid",
+            "title": "Tenant Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "tenant_id",
+          "api_key",
+          "expires_at",
+          "quotas"
+        ],
+        "title": "SandboxCreated",
+        "type": "object"
+      },
+      "SandboxQuotasRead": {
+        "properties": {
+          "max_endpoints": {
+            "title": "Max Endpoints",
+            "type": "integer"
+          },
+          "max_events": {
+            "title": "Max Events",
+            "type": "integer"
+          },
+          "rate_limit_requests_per_second": {
+            "title": "Rate Limit Requests Per Second",
+            "type": "number"
+          },
+          "ttl_minutes": {
+            "title": "Ttl Minutes",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "max_endpoints",
+          "max_events",
+          "rate_limit_requests_per_second",
+          "ttl_minutes"
+        ],
+        "title": "SandboxQuotasRead",
+        "type": "object"
+      },
+      "SignatureVerifyRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "body": {
+            "description": "The raw request body exactly as sent, as a string.",
+            "title": "Body",
+            "type": "string"
+          },
+          "secret": {
+            "title": "Secret",
+            "type": "string"
+          },
+          "signature": {
+            "title": "Signature",
+            "type": "string"
+          },
+          "timestamp": {
+            "title": "Timestamp",
+            "type": "integer"
+          },
+          "tolerance_seconds": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Defaults to Settings.signature_tolerance_seconds.",
+            "title": "Tolerance Seconds"
+          }
+        },
+        "required": [
+          "secret",
+          "timestamp",
+          "body",
+          "signature"
+        ],
+        "title": "SignatureVerifyRequest",
+        "type": "object"
+      },
+      "SignatureVerifyResponse": {
+        "properties": {
+          "valid": {
+            "title": "Valid",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "valid"
+        ],
+        "title": "SignatureVerifyResponse",
+        "type": "object"
+      },
       "ValidationError": {
         "properties": {
           "ctx": {
@@ -627,6 +802,102 @@
         ]
       }
     },
+    "/mock/always-200": {
+      "post": {
+        "operationId": "always_200_mock_always_200_post",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Mock receiver: always returns 200",
+        "tags": [
+          "mock"
+        ]
+      }
+    },
+    "/mock/always-500": {
+      "post": {
+        "operationId": "always_500_mock_always_500_post",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Mock receiver: always returns 500",
+        "tags": [
+          "mock"
+        ]
+      }
+    },
+    "/mock/flaky-50": {
+      "post": {
+        "operationId": "flaky_50_mock_flaky_50_post",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Mock receiver: 200 or 500 with 50% probability each",
+        "tags": [
+          "mock"
+        ]
+      }
+    },
+    "/mock/redirect-to-metadata": {
+      "post": {
+        "description": "Responds with a 307 redirect to 169.254.169.254 -- registering this as an endpoint and triggering an event demonstrates the SSRF guard blocking the redirect hop live; the attempt is recorded with error_class=ssrf_blocked and no connection to the metadata address is ever made.",
+        "operationId": "redirect_to_metadata_mock_redirect_to_metadata_post",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Mock receiver: redirects to the cloud metadata IP",
+        "tags": [
+          "mock"
+        ]
+      }
+    },
+    "/mock/slow-8s": {
+      "post": {
+        "operationId": "slow_8s_mock_slow_8s_post",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Mock receiver: sleeps 8s before responding 200",
+        "tags": [
+          "mock"
+        ]
+      }
+    },
     "/readyz": {
       "get": {
         "operationId": "readyz_readyz_get",
@@ -705,7 +976,7 @@
                 }
               }
             },
-            "description": "A valid key that lacks the scope this endpoint requires."
+            "description": "A valid key that lacks the scope this endpoint requires, or a sandbox tenant that has exceeded one of its hard-capped quotas."
           },
           "404": {
             "content": {
@@ -832,7 +1103,7 @@
                 }
               }
             },
-            "description": "A valid key that lacks the scope this endpoint requires."
+            "description": "A valid key that lacks the scope this endpoint requires, or a sandbox tenant that has exceeded one of its hard-capped quotas."
           },
           "422": {
             "content": {
@@ -943,7 +1214,7 @@
                 }
               }
             },
-            "description": "A valid key that lacks the scope this endpoint requires."
+            "description": "A valid key that lacks the scope this endpoint requires, or a sandbox tenant that has exceeded one of its hard-capped quotas."
           },
           "422": {
             "content": {
@@ -981,7 +1252,7 @@
         ]
       },
       "post": {
-        "description": "Registers a webhook endpoint for the authenticated tenant. The response includes the HMAC signing secret -- the only time it's ever returned.",
+        "description": "Registers a webhook endpoint for the authenticated tenant. The response includes the HMAC signing secret -- the only time it's ever returned. A sandbox tenant is capped at a small fixed number of endpoints (403 once exceeded); a normal tenant has no such cap.",
         "operationId": "create_endpoint_v1_endpoints_post",
         "requestBody": {
           "content": {
@@ -1032,7 +1303,7 @@
                 }
               }
             },
-            "description": "A valid key that lacks the scope this endpoint requires."
+            "description": "A valid key that lacks the scope this endpoint requires, or a sandbox tenant that has exceeded one of its hard-capped quotas."
           },
           "422": {
             "content": {
@@ -1117,7 +1388,7 @@
                 }
               }
             },
-            "description": "A valid key that lacks the scope this endpoint requires."
+            "description": "A valid key that lacks the scope this endpoint requires, or a sandbox tenant that has exceeded one of its hard-capped quotas."
           },
           "404": {
             "content": {
@@ -1208,7 +1479,7 @@
                 }
               }
             },
-            "description": "A valid key that lacks the scope this endpoint requires."
+            "description": "A valid key that lacks the scope this endpoint requires, or a sandbox tenant that has exceeded one of its hard-capped quotas."
           },
           "404": {
             "content": {
@@ -1310,7 +1581,7 @@
                 }
               }
             },
-            "description": "A valid key that lacks the scope this endpoint requires."
+            "description": "A valid key that lacks the scope this endpoint requires, or a sandbox tenant that has exceeded one of its hard-capped quotas."
           },
           "404": {
             "content": {
@@ -1365,7 +1636,7 @@
     },
     "/v1/events": {
       "post": {
-        "description": "Accepts an event for delivery to every endpoint subscribed to its type. Idempotency-Key is required: the same key with an identical body replays the original event (same 202, same event back); with a differing body it's a 409. Subject to a per-tenant rate limit; exceeding it returns 429 with Retry-After.",
+        "description": "Accepts an event for delivery to every endpoint subscribed to its type. Idempotency-Key is required: the same key with an identical body replays the original event (same 202, same event back); with a differing body it's a 409. Subject to a per-tenant rate limit; exceeding it returns 429 with Retry-After. The raw request body is capped at Settings.event_payload_max_bytes (413 over).",
         "operationId": "ingest_event_v1_events_post",
         "parameters": [
           {
@@ -1432,7 +1703,7 @@
                 }
               }
             },
-            "description": "A valid key that lacks the scope this endpoint requires."
+            "description": "A valid key that lacks the scope this endpoint requires, or a sandbox tenant that has exceeded one of its hard-capped quotas."
           },
           "409": {
             "content": {
@@ -1448,6 +1719,21 @@
               }
             },
             "description": "The Idempotency-Key was already used with a different request body, or the target resource isn't in a state that allows this action."
+          },
+          "413": {
+            "content": {
+              "application/problem+json": {
+                "example": {
+                  "detail": "payload too large: 131072 bytes, max 65536",
+                  "instance": "/v1/events",
+                  "status": 413,
+                  "title": "Payload Too Large",
+                  "trace_id": "b3f1c2a4-5e6d-4f7a-8b9c-0d1e2f3a4b5c",
+                  "type": "/problems/payload-too-large"
+                }
+              }
+            },
+            "description": "The raw request body exceeded the configured max event payload size."
           },
           "422": {
             "content": {
@@ -1497,6 +1783,241 @@
         "summary": "Ingest an event",
         "tags": [
           "events"
+        ]
+      }
+    },
+    "/v1/sandbox": {
+      "post": {
+        "description": "No account needed: creates a scoped, TTL-limited (60 min) tenant and API key with hard-capped quotas (max endpoints, max events, a tight per-second rate limit), for driving the public demo console. Rate-limited per client IP.",
+        "operationId": "create_sandbox_v1_sandbox_post",
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SandboxCreated"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "429": {
+            "content": {
+              "application/problem+json": {
+                "example": {
+                  "detail": "rate limit exceeded, retry after 1.00s",
+                  "instance": "/v1/events",
+                  "status": 429,
+                  "title": "Too Many Requests",
+                  "trace_id": "b3f1c2a4-5e6d-4f7a-8b9c-0d1e2f3a4b5c",
+                  "type": "/problems/rate-limited"
+                }
+              }
+            },
+            "description": "The tenant's rate-limit budget is exhausted; retry after the value (seconds) in the Retry-After response header."
+          }
+        },
+        "summary": "Provision a sandbox tenant and API key",
+        "tags": [
+          "sandbox"
+        ]
+      }
+    },
+    "/v1/sandbox/metrics": {
+      "get": {
+        "description": "Queue depth, in-flight count, p95 latency, and success rate over a bounded recent sample of the tenant's delivery attempts -- computed on request from existing tables, not a standing Prometheus/Grafana stack (that's optional Phase 5).",
+        "operationId": "get_metrics_v1_sandbox_metrics_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MetricsRead"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {
+                "example": {
+                  "detail": "missing or invalid API key",
+                  "instance": "/v1/endpoints",
+                  "status": 401,
+                  "title": "Unauthorized",
+                  "trace_id": "b3f1c2a4-5e6d-4f7a-8b9c-0d1e2f3a4b5c",
+                  "type": "/problems/unauthorized"
+                }
+              }
+            },
+            "description": "Missing, malformed, unknown, or revoked API key."
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {
+                "example": {
+                  "detail": "insufficient scope",
+                  "instance": "/v1/endpoints",
+                  "status": 403,
+                  "title": "Forbidden",
+                  "trace_id": "b3f1c2a4-5e6d-4f7a-8b9c-0d1e2f3a4b5c",
+                  "type": "/problems/forbidden"
+                }
+              }
+            },
+            "description": "A valid key that lacks the scope this endpoint requires, or a sandbox tenant that has exceeded one of its hard-capped quotas."
+          }
+        },
+        "security": [
+          {
+            "APIKeyHeader": []
+          }
+        ],
+        "summary": "Live delivery metrics for the console's metrics strip",
+        "tags": [
+          "sandbox"
+        ]
+      }
+    },
+    "/v1/sandbox/stream": {
+      "get": {
+        "description": "Server-Sent Events stream of the authenticated tenant's delivery attempts as they happen -- attempt #, status, latency, error class, next_retry_at, and breaker state. Scoped by construction: this subscribes to a per-tenant Redis Pub/Sub channel, so another tenant's events are never received, not merely filtered out.",
+        "operationId": "stream_attempts_v1_sandbox_stream_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {
+                "example": {
+                  "detail": "missing or invalid API key",
+                  "instance": "/v1/endpoints",
+                  "status": 401,
+                  "title": "Unauthorized",
+                  "trace_id": "b3f1c2a4-5e6d-4f7a-8b9c-0d1e2f3a4b5c",
+                  "type": "/problems/unauthorized"
+                }
+              }
+            },
+            "description": "Missing, malformed, unknown, or revoked API key."
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {
+                "example": {
+                  "detail": "insufficient scope",
+                  "instance": "/v1/endpoints",
+                  "status": 403,
+                  "title": "Forbidden",
+                  "trace_id": "b3f1c2a4-5e6d-4f7a-8b9c-0d1e2f3a4b5c",
+                  "type": "/problems/forbidden"
+                }
+              }
+            },
+            "description": "A valid key that lacks the scope this endpoint requires, or a sandbox tenant that has exceeded one of its hard-capped quotas."
+          }
+        },
+        "summary": "Live delivery-attempt timeline (SSE)",
+        "tags": [
+          "sandbox"
+        ]
+      }
+    },
+    "/v1/sandbox/verify-signature": {
+      "post": {
+        "description": "Thin wrapper over relay.infra.signing.verify() -- the exact function every receiver should run on their end -- so the console's signature-verification widget exercises the real implementation rather than a JS reimplementation of it.",
+        "operationId": "verify_signature_v1_sandbox_verify_signature_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SignatureVerifyRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SignatureVerifyResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {
+                "example": {
+                  "detail": "missing or invalid API key",
+                  "instance": "/v1/endpoints",
+                  "status": 401,
+                  "title": "Unauthorized",
+                  "trace_id": "b3f1c2a4-5e6d-4f7a-8b9c-0d1e2f3a4b5c",
+                  "type": "/problems/unauthorized"
+                }
+              }
+            },
+            "description": "Missing, malformed, unknown, or revoked API key."
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {
+                "example": {
+                  "detail": "insufficient scope",
+                  "instance": "/v1/endpoints",
+                  "status": 403,
+                  "title": "Forbidden",
+                  "trace_id": "b3f1c2a4-5e6d-4f7a-8b9c-0d1e2f3a4b5c",
+                  "type": "/problems/forbidden"
+                }
+              }
+            },
+            "description": "A valid key that lacks the scope this endpoint requires, or a sandbox tenant that has exceeded one of its hard-capped quotas."
+          },
+          "422": {
+            "content": {
+              "application/problem+json": {
+                "example": {
+                  "detail": [
+                    {
+                      "loc": [
+                        "body",
+                        "subscribed_event_types"
+                      ],
+                      "msg": "Field required",
+                      "type": "missing"
+                    }
+                  ],
+                  "instance": "/v1/endpoints",
+                  "status": 422,
+                  "title": "Validation Error",
+                  "trace_id": "b3f1c2a4-5e6d-4f7a-8b9c-0d1e2f3a4b5c",
+                  "type": "/problems/validation-error"
+                }
+              }
+            },
+            "description": "Request body/query failed validation, or a cursor was malformed."
+          }
+        },
+        "security": [
+          {
+            "APIKeyHeader": []
+          }
+        ],
+        "summary": "Verify an HMAC delivery signature",
+        "tags": [
+          "sandbox"
         ]
       }
     }

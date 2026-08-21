@@ -1,0 +1,140 @@
+{% extends "base.html" %}
+{% block content %}
+<div id="app" x-data="relayConsole()" x-init="init()">
+  <header class="hero">
+    <h1>Relay -- Delivery Theater</h1>
+    <p>
+      A live, self-provisioned sandbox of an at-least-once webhook delivery service.
+      No account needed. Everything below drives the real <code>/v1</code> API --
+      <a href="/docs" target="_blank" rel="noopener">the same one documented at /docs</a>.
+    </p>
+  </header>
+
+  <section class="panel" x-show="!sandbox">
+    <h2>1. Start a sandbox</h2>
+    <p>Issues a scoped API key, good for 60 minutes, capped at 3 endpoints / 20 events / 1 req/s.</p>
+    <button @click="startSandbox()" :disabled="loading.sandbox">Start sandbox</button>
+    <p class="error" x-show="errors.sandbox" x-text="errors.sandbox"></p>
+  </section>
+
+  <template x-if="sandbox">
+    <div>
+      <section class="panel">
+        <h2>Sandbox active</h2>
+        <dl class="kv">
+          <dt>Tenant</dt><dd x-text="sandbox.tenant_id"></dd>
+          <dt>Expires</dt><dd x-text="new Date(sandbox.expires_at).toLocaleTimeString()"></dd>
+          <dt>Quotas</dt>
+          <dd>
+            max <span x-text="sandbox.quotas.max_endpoints"></span> endpoints,
+            max <span x-text="sandbox.quotas.max_events"></span> events,
+            <span x-text="sandbox.quotas.rate_limit_requests_per_second"></span> req/s
+          </dd>
+        </dl>
+      </section>
+
+      <section class="panel">
+        <h2>2. Register a destination</h2>
+        <label>
+          Mock receiver
+          <select x-model="destinationChoice">
+            <option value="/mock/always-200">always-200 -- happy path</option>
+            <option value="/mock/always-500">always-500 -- retries exhaust, breaker trips, lands in DLQ</option>
+            <option value="/mock/slow-8s">slow-8s -- times out</option>
+            <option value="/mock/flaky-50">flaky-50 -- 50% partial failure</option>
+            <option value="/mock/redirect-to-metadata">redirect-to-metadata -- SSRF guard blocks it</option>
+            <option value="custom">custom URL...</option>
+          </select>
+        </label>
+        <label x-show="destinationChoice === 'custom'">
+          URL (must be https)
+          <input type="url" x-model="customUrl" placeholder="https://example.com/webhooks/relay" />
+        </label>
+        <button @click="registerEndpoint()" :disabled="loading.endpoint || endpoints.length >= sandbox.quotas.max_endpoints">
+          Register destination
+        </button>
+        <p class="error" x-show="errors.endpoint" x-text="errors.endpoint"></p>
+
+        <ul class="endpoints">
+          <template x-for="ep in endpoints" :key="ep.id">
+            <li>
+              <span class="pill" :class="'breaker-' + ep.breaker_state" x-text="ep.breaker_state"></span>
+              <code x-text="ep.url"></code>
+              <button class="link" @click="triggerEvent(ep)" :disabled="loading.event">Trigger event</button>
+            </li>
+          </template>
+        </ul>
+      </section>
+
+      <section class="panel" x-show="lastTrigger">
+        <h2>3. Ingest response</h2>
+        <p>
+          <strong x-text="lastTrigger && lastTrigger.status"></strong>
+          -- Location: <code x-text="lastTrigger && lastTrigger.location"></code>
+        </p>
+      </section>
+
+      <section class="panel metrics-strip">
+        <h2>Live metrics</h2>
+        <div class="metrics">
+          <div><span x-text="metrics.queue_depth ?? '--'"></span><small>queue depth</small></div>
+          <div><span x-text="metrics.in_flight ?? '--'"></span><small>in flight</small></div>
+          <div><span x-text="metrics.p95_latency_ms ?? '--'"></span><small>p95 ms</small></div>
+          <div><span x-text="metrics.success_rate != null ? Math.round(metrics.success_rate * 100) + '%' : '--'"></span><small>success rate</small></div>
+        </div>
+      </section>
+
+      <section class="panel">
+        <h2>Live attempt timeline</h2>
+        <table class="timeline">
+          <thead>
+            <tr><th>#</th><th>status</th><th>latency</th><th>error</th><th>next retry</th><th></th></tr>
+          </thead>
+          <tbody>
+            <template x-for="(a, i) in timeline" :key="i">
+              <tr>
+                <td x-text="a.attempt_no"></td>
+                <td x-text="a.response_status ?? a.delivery_state"></td>
+                <td x-text="a.latency_ms + 'ms'"></td>
+                <td x-text="a.error_class ?? '--'"></td>
+                <td x-text="a.next_retry_at ? new Date(a.next_retry_at).toLocaleTimeString() : '--'"></td>
+                <td><button class="link" @click="inspect(a)">inspect</button></td>
+              </tr>
+            </template>
+          </tbody>
+        </table>
+      </section>
+
+      <section class="panel" x-show="inspected">
+        <h2>Outbound request inspector</h2>
+        <pre x-text="inspected && JSON.stringify(inspected.request_headers, null, 2)"></pre>
+      </section>
+
+      <section class="panel">
+        <h2>Verify a signature</h2>
+        <p>Paste the endpoint secret to verify a captured attempt, or tamper the body to watch it fail.</p>
+        <label>Endpoint secret <input type="text" x-model="verify.secret" placeholder="from registration, shown once" /></label>
+        <label>Body <textarea x-model="verify.body"></textarea></label>
+        <label>Timestamp <input type="number" x-model="verify.timestamp" /></label>
+        <label>Signature <input type="text" x-model="verify.signature" /></label>
+        <button @click="verifySignature()">Verify</button>
+        <p x-show="verify.result !== null" :class="verify.result ? 'ok' : 'error'" x-text="verify.result === null ? '' : (verify.result ? 'valid' : 'invalid')"></p>
+      </section>
+
+      <section class="panel">
+        <h2>Dead-letter queue</h2>
+        <button class="link" @click="loadDlq()">Refresh</button>
+        <ul class="dlq">
+          <template x-for="d in dlq" :key="d.id">
+            <li>
+              <code x-text="d.id"></code> -- <span x-text="d.attempt_count"></span> attempts
+              <button class="link" @click="replay(d)">Replay</button>
+            </li>
+          </template>
+        </ul>
+      </section>
+    </div>
+  </template>
+</div>
+<script src="/static/console.js"></script>
+{% endblock %}

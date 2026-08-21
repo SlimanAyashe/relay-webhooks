@@ -34,6 +34,10 @@ class TenantFactory(DataclassFactory[Tenant]):
     def deleted_at(cls) -> None:
         return None
 
+    @classmethod
+    def is_sandbox(cls) -> bool:
+        return False
+
 
 class ApiKeyFactory(DataclassFactory[ApiKey]):
     __model__ = ApiKey
@@ -61,6 +65,10 @@ class ApiKeyFactory(DataclassFactory[ApiKey]):
 
     @classmethod
     def revoked_at(cls) -> None:
+        return None
+
+    @classmethod
+    def expires_at(cls) -> None:
         return None
 
 
@@ -197,4 +205,8 @@ class DeliveryAttemptFactory(DataclassFactory[DeliveryAttempt]):
 
     @classmethod
     def response_snippet(cls) -> None:
+        return None
+
+    @classmethod
+    def request_headers(cls) -> None:
         return None
