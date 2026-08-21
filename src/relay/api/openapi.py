@@ -38,6 +38,14 @@ _EXAMPLES: dict[int, dict[str, object]] = {
         "instance": "/v1/events",
         "trace_id": "b3f1c2a4-5e6d-4f7a-8b9c-0d1e2f3a4b5c",
     },
+    413: {
+        "type": "/problems/payload-too-large",
+        "title": "Payload Too Large",
+        "status": 413,
+        "detail": "payload too large: 131072 bytes, max 65536",
+        "instance": "/v1/events",
+        "trace_id": "b3f1c2a4-5e6d-4f7a-8b9c-0d1e2f3a4b5c",
+    },
     422: {
         "type": "/problems/validation-error",
         "title": "Validation Error",
@@ -64,10 +72,12 @@ _EXAMPLES: dict[int, dict[str, object]] = {
 
 _DESCRIPTIONS: dict[int, str] = {
     401: "Missing, malformed, unknown, or revoked API key.",
-    403: "A valid key that lacks the scope this endpoint requires.",
+    403: "A valid key that lacks the scope this endpoint requires, or a sandbox tenant "
+    "that has exceeded one of its hard-capped quotas.",
     404: "No resource with this id belongs to the authenticated tenant.",
     409: "The Idempotency-Key was already used with a different request body, or the "
     "target resource isn't in a state that allows this action.",
+    413: "The raw request body exceeded the configured max event payload size.",
     422: "Request body/query failed validation, or a cursor was malformed.",
     429: "The tenant's rate-limit budget is exhausted; retry after the value (seconds) "
     "in the Retry-After response header.",

@@ -50,6 +50,44 @@ class Settings(BaseSettings):
     # ...and the bucket's burst capacity (max requests admitted instantaneously).
     rate_limit_burst: int = 20
 
+    # Phase 4 demo console -- see docs/adr/0006-phase-4-demo-console.md.
+
+    # Outbound HTTP timeouts, now a settings knob rather than a module constant in
+    # relay.infra.http_sender. Deliberately tighter than the plan's original "10s"
+    # figure so the `slow-8s` mock receiver reliably demonstrates the timeout path (an
+    # 8s response comfortably clears a 5s read timeout) -- still generous for any real
+    # webhook receiver, which should answer in well under a second.
+    outbound_connect_timeout_seconds: float = 5.0
+    outbound_read_timeout_seconds: float = 5.0
+    # Identifies the service (and a docs URL) on every outbound delivery request, so an
+    # abuse report against a customer's server is traceable back to us and answerable.
+    outbound_user_agent: str = "Relay-Webhooks/1.0 (+https://relay.bookr.tech/docs)"
+    # Note: dispatcher_concurrency (above, Phase 2) already *is* the process-wide cap on
+    # concurrent outbound deliveries across every endpoint -- one asyncio.Semaphore of
+    # that size gates every delivery attempt in relay.workers.dispatcher.run_forever,
+    # regardless of how many distinct endpoints are registered. Phase 4's abuse-controls
+    # requirement for "a global outbound concurrency cap distinct from the per-endpoint
+    # cap" is this setting; it doesn't need a second one alongside
+    # dispatcher_per_endpoint_concurrency (Phase 3).
+
+    # Event ingest rejects payloads over this size with a 413 -- closes off using the
+    # public sandbox as a large-payload relay.
+    event_payload_max_bytes: int = 65_536
+
+    # Sandbox: a scoped, TTL-limited tenant + API key an interviewer can self-provision
+    # from the demo console with no signup, hard-capped well below normal tenant limits.
+    sandbox_ttl_minutes: int = 60
+    sandbox_max_endpoints: int = 3
+    sandbox_max_events: int = 20
+    # Deliberately reuses relay.infra.rate_limit's token-bucket mechanism rather than a
+    # second limiter -- just parameterized far tighter than a real tenant's budget.
+    sandbox_rate_limit_requests_per_second: float = 1.0
+    sandbox_rate_limit_burst: int = 3
+    # Per-IP limit on POST /v1/sandbox itself, keyed by client IP (see
+    # relay.api.v1.sandbox.router) -- prevents scripted sandbox-key farming.
+    sandbox_creation_rate_limit_requests_per_second: float = 0.05
+    sandbox_creation_rate_limit_burst: int = 3
+
 
 @lru_cache
 def get_settings() -> Settings:

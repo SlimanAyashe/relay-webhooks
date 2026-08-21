@@ -1,7 +1,7 @@
 import uuid
 from datetime import datetime
 
-from sqlalchemy import select, tuple_
+from sqlalchemy import func, select, tuple_
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from relay.domain.deliveries import Delivery, DeliveryState
@@ -98,6 +98,24 @@ class DeliveryRepository:
         await self._session.flush()
         await self._session.refresh(model)
         return _to_domain(model)
+
+    async def count_by_states_for_tenant(
+        self, tenant_id: uuid.UUID, states: list[DeliveryState]
+    ) -> int:
+        """Used by the Phase 4 sandbox metrics snapshot (relay.services.deliveries.metrics_service)
+        for queue depth / in-flight counts, scoped to `tenant_id` via the same join through
+        `events` list_dead() uses.
+        """
+        result = await self._session.execute(
+            select(func.count())
+            .select_from(DeliveryModel)
+            .join(EventModel, DeliveryModel.event_id == EventModel.id)
+            .where(
+                EventModel.tenant_id == tenant_id,
+                DeliveryModel.state.in_([s.value for s in states]),
+            )
+        )
+        return result.scalar_one()
 
     async def list_dead(
         self, tenant_id: uuid.UUID, *, cursor: str | None = None, limit: int = DEFAULT_PAGE_LIMIT

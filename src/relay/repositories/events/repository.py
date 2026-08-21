@@ -1,6 +1,6 @@
 import uuid
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -68,6 +68,13 @@ class EventRepository:
     async def get(self, event_id: uuid.UUID) -> Event | None:
         model = await self._session.get(EventModel, event_id)
         return _to_domain(model) if model is not None else None
+
+    async def count_for_tenant(self, tenant_id: uuid.UUID) -> int:
+        """Used by the Phase 4 sandbox quota check (relay.services.sandbox.service)."""
+        result = await self._session.execute(
+            select(func.count()).select_from(EventModel).where(EventModel.tenant_id == tenant_id)
+        )
+        return result.scalar_one()
 
     async def get_by_idempotency_key(
         self, tenant_id: uuid.UUID, idempotency_key: str

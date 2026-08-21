@@ -29,7 +29,7 @@ async def process_delivery_message(
     Shared by the dispatcher's normal consumer loop and the reaper's reclaimed-message path
     -- both are ultimately just "process this delivery_id" once they have one in hand.
     """
-    service = DeliveryAttemptService(uow_factory(), http_sender)
+    service = DeliveryAttemptService(uow_factory(), http_sender, redis=redis)
     delivery = await service.attempt(delivery_id)
     if delivery.state is DeliveryState.RETRYING and delivery.next_retry_at is not None:
         await schedule_retry(redis, delivery.id, delivery.next_retry_at)

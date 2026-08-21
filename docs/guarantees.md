@@ -59,7 +59,22 @@ stop" -- both lists below are meant to be read together, not the "guaranteed" ha
   breaker (5 consecutive failures by default) stops sending real requests to a destination
   that's actively failing; a per-endpoint concurrency cap (3 by default) bounds how many
   in-flight attempts any single endpoint can have even while it's still returning 2xx
-  slowly.
+  slowly; a process-wide dispatcher concurrency cap bounds total concurrent outbound
+  deliveries across every endpoint regardless of how many are registered.
+- **A sandbox tenant (self-provisioned via `POST /v1/sandbox`, no account needed) is
+  hard-capped well below a real tenant's limits, on every axis independently: a 60-minute
+  key TTL, a fixed max endpoint count, a fixed max event count, and a per-second rate
+  limit tighter than the default tenant budget.** All four are enforced server-side
+  regardless of what the console UI does or doesn't send; a sandbox key past its TTL is
+  rejected exactly like a revoked one, and the two count caps
+  (`relay.domain.sandbox.quota`) are checked independently of the rate limiter, not
+  implied by it.
+- **The console's mock receivers and sandbox surface never weaken any guarantee above.**
+  `/mock/*` are ordinary registered destinations subject to the same SSRF guard, signing,
+  breaker, and retry logic as any tenant's real endpoint; `/v1/sandbox/stream` only ever
+  exposes attempt data already reachable via `GET /v1/dlq`/`GET /v1/deliveries`, scoped to
+  the requesting tenant by construction (one Redis Pub/Sub channel per tenant id, not a
+  filter applied after the fact).
 
 ## Not guaranteed
 
@@ -96,6 +111,12 @@ stop" -- both lists below are meant to be read together, not the "guaranteed" ha
   receiver, and 300 seconds is a width chosen for that purpose, not a zero-replay
   guarantee. A receiver with stricter replay requirements should additionally track
   `X-Relay-Delivery-Id` values it has already seen within the tolerance window.
+- **The sandbox key is not treated as confidential on `GET /v1/sandbox/stream`.** A
+  browser's native `EventSource` can't set request headers, so that one endpoint accepts
+  the key as a `?api_key=` query parameter -- which can end up in proxy/access logs and
+  browser history -- rather than only the `X-API-Key` header every other route requires.
+  Deliberately scoped to a single, tightly-capped, 60-minute-lived, read-only stream; see
+  `docs/adr/0006-phase-4-demo-console.md` for the tradeoff and why it isn't generalized.
 - **The rate limiter is a per-tenant budget, not a global one, and it is best-effort under
   Redis unavailability.** If Redis is unreachable, `allow()`'s `EVAL` call raises like any
   other Redis error -- event ingest fails closed (the request errors out) rather than
@@ -108,6 +129,7 @@ stop" -- both lists below are meant to be read together, not the "guaranteed" ha
   test proves it" table, one row per guarantee above.
 - `docs/adr/` -- the numbered decisions and their alternatives, including
   `docs/adr/0005-phase-3-security-resilience.md` for the signing/SSRF/breaker/concurrency
-  tradeoffs specifically.
+  tradeoffs specifically, and `docs/adr/0006-phase-4-demo-console.md` for the sandbox/SSE
+  tradeoffs.
 - `docs/runbook.md` -- the network-layer egress rules that back the SSRF guarantee as
   defense in depth, plus deploy/rollback/DLQ-drain operational steps.

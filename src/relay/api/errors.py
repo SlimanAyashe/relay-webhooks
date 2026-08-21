@@ -12,7 +12,9 @@ from relay.domain.errors import (
     ConflictError,
     DomainError,
     NotFoundError,
+    PayloadTooLarge,
     RateLimitExceeded,
+    SandboxQuotaExceeded,
     SsrfBlocked,
     ValidationError,
 )
@@ -27,6 +29,7 @@ _TYPE_BY_STATUS: dict[int, str] = {
     status.HTTP_404_NOT_FOUND: "/problems/not-found",
     status.HTTP_409_CONFLICT: "/problems/conflict",
     status.HTTP_422_UNPROCESSABLE_CONTENT: "/problems/validation-error",
+    status.HTTP_413_CONTENT_TOO_LARGE: "/problems/payload-too-large",
     status.HTTP_429_TOO_MANY_REQUESTS: "/problems/rate-limited",
     status.HTTP_500_INTERNAL_SERVER_ERROR: "/problems/internal-error",
 }
@@ -36,6 +39,7 @@ _TITLE_BY_STATUS: dict[int, str] = {
     status.HTTP_403_FORBIDDEN: "Forbidden",
     status.HTTP_404_NOT_FOUND: "Not Found",
     status.HTTP_409_CONFLICT: "Conflict",
+    status.HTTP_413_CONTENT_TOO_LARGE: "Payload Too Large",
     status.HTTP_422_UNPROCESSABLE_CONTENT: "Validation Error",
     status.HTTP_429_TOO_MANY_REQUESTS: "Too Many Requests",
     status.HTTP_500_INTERNAL_SERVER_ERROR: "Internal Server Error",
@@ -49,6 +53,8 @@ _TITLE_BY_STATUS: dict[int, str] = {
 _DOMAIN_ERROR_STATUS: list[tuple[type[DomainError], int]] = [
     (NotFoundError, status.HTTP_404_NOT_FOUND),
     (ConflictError, status.HTTP_409_CONFLICT),
+    (PayloadTooLarge, status.HTTP_413_CONTENT_TOO_LARGE),
+    (SandboxQuotaExceeded, status.HTTP_403_FORBIDDEN),
     (SsrfBlocked, status.HTTP_422_UNPROCESSABLE_CONTENT),
     (ValidationError, status.HTTP_422_UNPROCESSABLE_CONTENT),
 ]

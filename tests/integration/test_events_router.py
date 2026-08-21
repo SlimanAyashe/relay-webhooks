@@ -93,6 +93,25 @@ async def test_wrong_scope_returns_403(wired_client: TestClient, auth_headers: A
     assert response.status_code == 403
 
 
+async def test_oversized_payload_returns_413(
+    wired_client: TestClient, auth_headers: AuthHeaders
+) -> None:
+    wired_client.app.dependency_overrides[get_settings] = lambda: Settings(  # type: ignore[attr-defined]
+        event_payload_max_bytes=64
+    )
+    _, headers = await auth_headers(frozenset({"*"}))
+    headers = {**headers, "Idempotency-Key": "idem-oversized"}
+
+    response = wired_client.post(
+        "/v1/events",
+        json={"type": "order.created", "payload": {"blob": "x" * 500}},
+        headers=headers,
+    )
+
+    assert response.status_code == 413
+    assert response.headers["content-type"] == "application/problem+json"
+
+
 def _pin_small_rate_limit_budget(wired_client: TestClient, *, burst: int) -> None:
     """Overrides Settings with a tiny burst and a near-zero refill rate, so the test
     doesn't race real wall-clock token refill against however long `burst` HTTP round

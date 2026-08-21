@@ -30,6 +30,29 @@ class RateLimitExceeded(DomainError):
         super().__init__(f"rate limit exceeded, retry after {retry_after_seconds:.2f}s")
 
 
+class PayloadTooLarge(DomainError):
+    """The raw request body exceeded Settings.event_payload_max_bytes -- closes off using
+    public event ingest (sandbox or otherwise) as a large-payload relay.
+    """
+
+    def __init__(self, actual_bytes: int, max_bytes: int) -> None:
+        self.actual_bytes = actual_bytes
+        self.max_bytes = max_bytes
+        super().__init__(f"payload too large: {actual_bytes} bytes, max {max_bytes}")
+
+
+class SandboxQuotaExceeded(DomainError):
+    """A sandbox tenant (Tenant.is_sandbox) tried to exceed one of its hard-capped
+    quotas (max endpoints, max events) -- independent of, and far tighter than, the
+    per-tenant rate limiter that applies to every tenant. See relay.domain.sandbox.quota.
+    """
+
+    def __init__(self, resource: str, limit: int) -> None:
+        self.resource = resource
+        self.limit = limit
+        super().__init__(f"sandbox quota exceeded: max {limit} {resource}")
+
+
 class SsrfBlocked(DomainError):
     """A destination URL resolved to a denied network (loopback/RFC1918/link-local/CGNAT/
     IPv6 ULA/cloud metadata) or targeted a non-allow-listed port.

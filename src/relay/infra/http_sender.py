@@ -12,8 +12,6 @@ from relay.infra.settings import get_settings
 from relay.infra.ssrf_guard import Resolver, check_url, default_resolver
 
 RESPONSE_SNIPPET_MAX_LEN = 2048
-DEFAULT_CONNECT_TIMEOUT_SECONDS = 5.0
-DEFAULT_READ_TIMEOUT_SECONDS = 10.0
 
 # How many redirect hops to follow, each re-validated by the SSRF guard before connecting.
 # httpx.AsyncClient defaults to follow_redirects=False, and this adapter also passes it
@@ -65,18 +63,29 @@ class HttpxOutboundSender:
     def __init__(
         self,
         *,
-        connect_timeout: float = DEFAULT_CONNECT_TIMEOUT_SECONDS,
-        read_timeout: float = DEFAULT_READ_TIMEOUT_SECONDS,
+        connect_timeout: float | None = None,
+        read_timeout: float | None = None,
         allowed_ports: frozenset[int] | None = None,
         resolver: Resolver = default_resolver,
+        user_agent: str | None = None,
     ) -> None:
+        settings = get_settings()
+        connect_timeout = (
+            connect_timeout
+            if connect_timeout is not None
+            else settings.outbound_connect_timeout_seconds
+        )
+        read_timeout = (
+            read_timeout if read_timeout is not None else settings.outbound_read_timeout_seconds
+        )
         self._timeout = httpx.Timeout(
             connect=connect_timeout, read=read_timeout, write=read_timeout, pool=connect_timeout
         )
         self._allowed_ports = (
-            allowed_ports if allowed_ports is not None else get_settings().ssrf_allowed_ports
+            allowed_ports if allowed_ports is not None else settings.ssrf_allowed_ports
         )
         self._resolver = resolver
+        self._user_agent = user_agent if user_agent is not None else settings.outbound_user_agent
 
     async def aclose(self) -> None:
         """No persistent client to close -- kept as a no-op so worker shutdown code
@@ -88,6 +97,11 @@ class HttpxOutboundSender:
     ) -> OutboundHttpResult:
         start = time.monotonic()
         current_url = url
+        # A fixed, identifying User-Agent on every outbound delivery request (including
+        # every redirect hop) so an abuse report against a customer's server is traceable
+        # back to this service and answerable. Set first so a caller-supplied header
+        # (there isn't one today) could still override it.
+        headers = {"User-Agent": self._user_agent, **headers}
 
         for hop in range(MAX_REDIRECT_HOPS + 1):
             check = await asyncio.to_thread(

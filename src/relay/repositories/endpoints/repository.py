@@ -1,7 +1,7 @@
 import uuid
 from datetime import datetime
 
-from sqlalchemy import any_, literal, select, tuple_
+from sqlalchemy import any_, func, literal, select, tuple_
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from relay.domain.endpoints import BreakerState, Endpoint, EndpointStatus
@@ -130,6 +130,17 @@ class EndpointRepository:
             )
         )
         return [_to_domain(model) for model in result.scalars()]
+
+    async def count_for_tenant(self, tenant_id: uuid.UUID) -> int:
+        """Used by the Phase 4 sandbox quota check (relay.services.sandbox.service) --
+        a plain COUNT rather than fetching and measuring a page of rows.
+        """
+        result = await self._session.execute(
+            select(func.count())
+            .select_from(EndpointModel)
+            .where(EndpointModel.tenant_id == tenant_id)
+        )
+        return result.scalar_one()
 
     async def list(
         self, tenant_id: uuid.UUID, *, cursor: str | None = None, limit: int = DEFAULT_PAGE_LIMIT

@@ -25,6 +25,11 @@ per-endpoint circuit breaker, DLQ + replay endpoint, per-tenant rate limiting) i
 code on `feat/phase-3-security-resilience`, not yet merged to `main` or deployed**. See "Phase 3
 — security and resilience" below for what's built and what's deliberately deferred.
 
+Phase 4 (the public demo console -- mock receivers, self-serve sandbox provisioning, the SSE
+attempt timeline, signature verifier, DLQ replay UI, metrics strip, and the abuse controls that
+make a public outbound HTTP proxy safe to expose) is **complete in code, same branch as Phase 3,
+not yet merged or deployed**. See "Phase 4 — the demo console" below.
+
 ## Phase 0 — skeleton (complete, deployed)
 
 Phase 0's goal: an empty-but-real skeleton deployed to production before any feature work starts,
@@ -334,10 +339,87 @@ shared with other pre-existing services and touching its firewall state needs de
 coordination, not something this repo's tooling should do unilaterally); no nightly backup/restore
 (Phase 5, optional); no demo console yet to actually exercise any of this publicly (Phase 4).
 
+## Phase 4 — the demo console (complete in code, not yet deployed)
+
+Phase 4's goal: make everything Phase 1-3 built actually visible, in under a minute, to
+someone with no account and no context -- and do it without weakening any guarantee Phase
+3 just finished establishing, since this is the first time the service is reachable by
+someone who isn't a trusted tenant. Per `docs/adr/0006-phase-4-demo-console.md`, the
+console is server-rendered (Jinja2 + htmx + Alpine.js + vanilla JS for `EventSource`, no
+SPA build step) and is otherwise just a browser client of the real `/v1` API plus the new
+`/v1/sandbox` surface -- no console-only backend logic exists outside the mock receivers,
+sandbox provisioning/quotas, and the SSE/metrics endpoints.
+
+**Done:**
+- `relay.web`: Jinja2 templates + a static-file mount (`/static`), served alongside the
+  `/v1` routers by the same FastAPI app; the console itself lives at `/` and is excluded
+  from the OpenAPI schema
+- Five built-in mock receivers under `/mock/*` (not versioned, same reasoning as
+  `/healthz`): `always-200`, `always-500`, `slow-8s`, `flaky-50`, and
+  `redirect-to-metadata` (a real 307 to `169.254.169.254`, for demonstrating the Phase 3
+  SSRF guard blocking a live redirect hop with no connection ever made)
+- Sandbox tenant/key provisioning (`POST /v1/sandbox`, `relay.services.sandbox.service.SandboxService`):
+  reuses Phase 1's API-key issuance and Phase 3's rate limiter rather than parallel
+  machinery -- a sandbox tenant is a `tenants` row with a new `is_sandbox` flag, a sandbox
+  key is an `api_keys` row with a new `expires_at` column (every other key's is `NULL` and
+  never expires), checked alongside the existing revocation check in `relay.api.auth`.
+  Rate-limited per client IP on creation itself, reusing `relay.infra.rate_limit`'s
+  token-bucket keyed on a `uuid5` of the IP rather than a tenant id
+- Fixed sandbox quotas -- 60-minute TTL, max 3 endpoints, max 20 events, a tighter
+  per-second rate limit than a normal tenant's default -- enforced server-side
+  independent of what the console UI sends. The two count caps are new
+  (`relay.domain.sandbox.quota.check_quota`, a pure decision function in the same shape as
+  the circuit breaker's), wired in as small router dependencies
+  (`_quota_checked_write_auth`, the extended `_rate_limited_auth`) rather than changes to
+  `EndpointService`/`EventIngestService` themselves -- a normal tenant is completely
+  unaffected
+- Live delivery-attempt timeline: the dispatcher (via `DeliveryAttemptService`, now
+  optionally `redis`-aware) publishes every attempt outcome -- including a breaker-open
+  deferral -- to a per-tenant Redis Pub/Sub channel (`relay.infra.attempt_events`);
+  `GET /v1/sandbox/stream` is a Server-Sent Events endpoint subscribing to exactly that
+  tenant's channel, so cross-tenant isolation is structural, not a filter. Because a
+  browser's native `EventSource` can't set headers, this one route accepts the sandbox key
+  as `?api_key=` (a documented, narrowly-scoped tradeoff -- see the ADR) via a new
+  `require_scope_allow_query_key` auth dependency; every other route is unaffected
+- Outbound-request inspector: `delivery_attempts` gained a `request_headers` JSONB column
+  (the real `X-Relay-Signature`/`X-Relay-Timestamp`/`X-Relay-Delivery-Id` sent, not a
+  client-side reconstruction), surfaced on both the DLQ listing and the live SSE feed
+- `POST /v1/sandbox/verify-signature`: a thin wrapper over the real `relay.infra.signing.verify()`,
+  so the console's tamper-and-fail demo exercises the actual verifier, not a JS
+  reimplementation of it
+- `GET /v1/sandbox/metrics`: queue depth, in-flight, p95 latency, and success rate over a
+  bounded recent attempt sample, computed on request from existing tables
+  (`relay.services.deliveries.metrics_service`) rather than standing up Phase 5's
+  Prometheus/Grafana stack early
+- DLQ replay wired into the console UI against the existing (unchanged)
+  `POST /v1/deliveries/{id}/replay` from Phase 3
+- Additional abuse controls: a 64 KB max event-payload size (413, checked at the ASGI
+  layer via `Content-Length` and re-checked against the actual received bytes), a fixed
+  identifying `User-Agent` on every outbound delivery request, and outbound
+  connect/read timeouts moved from hardcoded 10s module constants to a `Settings` knob
+  defaulting to 5s each -- a real (documented, deliberate) behavior change to the delivery
+  engine, made so the `slow-8s` mock receiver actually demonstrates the timeout path it's
+  named for. The process-wide dispatcher concurrency cap Phase 4's plan called for already
+  existed since Phase 2 (`dispatcher_concurrency`); no second mechanism was added
+- `docs/adr/0006-phase-4-demo-console.md`, new rows in `docs/failure-modes.md` and
+  `docs/guarantees.md` for sandbox TTL/quota/isolation and the SSE query-param tradeoff
+- 32 new tests (unit + integration via testcontainers, respx, freezegun), bringing the
+  suite to 270 total, all passing; `make lint`, `make typecheck`, `uv run lint-imports`,
+  and `uv run pip-audit` all clean; `docker build` and a real `docker compose up` smoke
+  test (sandbox provisioning, endpoint registration, DLQ/metrics/SSE/verify-signature all
+  exercised against the live containerized stack) both verified manually
+
+**Not done in Phase 4** (by design, deferred): the metrics strip's "in-flight" number is
+an approximation (deliveries currently `RETRYING`, not a literal count of attempts
+executing this instant -- there's no live registry for that); no Prometheus/Grafana (Phase
+5, optional); the SSE query-param auth tradeoff is accepted only for that one route, not
+generalized.
+
 ## What's next
 
-Phase 4 (the public demo console + the remaining failure-scenario tests — revoked/malformed API
-key is already covered from Phase 1, so what's left is the console itself: mock receivers,
-sandbox provisioning, the SSE attempt timeline, signature verifier, breaker pill, DLQ replay UI,
-metrics strip, abuse controls) — the phase that makes everything Phase 3 built actually visible to
-someone who isn't reading the code.
+Phase 4 was the last **core** phase (weeks 1-8 per the project plan) -- the project is now
+complete and demoable on its own. Everything remaining (Phase 5 observability/ops, Phase 6
+load-test/proof/polish, Phase 7 buffer/interview-prep) is optional per the plan's own scope
+discipline and can be picked up, reordered, or dropped without leaving a hole. Immediate
+next steps if continuing: merge `feat/phase-3-security-resilience` (which now also carries
+Phase 4) to `main` and deploy, since nothing in Phases 3-4 has reached production yet.

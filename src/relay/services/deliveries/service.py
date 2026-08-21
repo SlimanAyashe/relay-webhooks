@@ -1,15 +1,22 @@
 import json
+import logging
 import uuid
 from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
 
-from relay.domain.deliveries import Delivery, compute_backoff_seconds
+from redis.asyncio import Redis
+
+from relay.domain.deliveries import Delivery, DeliveryState, compute_backoff_seconds
+from relay.domain.delivery_attempts import AttemptErrorClass
 from relay.domain.endpoints import BreakerState, next_breaker_state, should_skip_for_open_breaker
 from relay.domain.errors import NotFoundError
+from relay.infra.attempt_events import AttemptEvent, publish_attempt_event
 from relay.infra.http_sender import OutboundHttpSender
 from relay.infra.settings import Settings, get_settings
 from relay.infra.signing import sign
 from relay.repositories.unit_of_work import UnitOfWork
+
+logger = logging.getLogger(__name__)
 
 REQUEST_SNIPPET_MAX_LEN = 2048
 
@@ -31,11 +38,17 @@ class DeliveryAttemptService:
         *,
         clock: Callable[[], datetime] = _utcnow,
         settings: Settings | None = None,
+        redis: Redis | None = None,
     ) -> None:
         self._uow = uow
         self._http_sender = http_sender
         self._clock = clock
         self._settings = settings or get_settings()
+        # Optional: when set, every outcome (including a breaker-open deferral) is
+        # published to Redis Pub/Sub for the Phase 4 demo console's live SSE timeline
+        # (relay.infra.attempt_events). None in most existing tests/callers -- publishing
+        # is best-effort and never blocks or fails the attempt itself.
+        self._redis = redis
 
     async def attempt(self, delivery_id: uuid.UUID) -> Delivery:
         async with self._uow:
@@ -66,6 +79,15 @@ class DeliveryAttemptService:
                     delivery.id, next_retry_at=endpoint.opened_at + cooldown
                 )
                 await self._uow.commit()
+                await self._publish(
+                    event.tenant_id,
+                    delivery=delivery,
+                    breaker_state=endpoint.breaker_state,
+                    attempt_no=delivery.attempt_count,
+                    latency_ms=0,
+                    response_status=None,
+                    error_class=None,
+                )
                 return delivery
 
             if endpoint.breaker_state is BreakerState.OPEN:
@@ -112,6 +134,7 @@ class DeliveryAttemptService:
                 error_class=result.error_class,
                 request_snippet=payload[:REQUEST_SNIPPET_MAX_LEN].decode(errors="replace"),
                 response_snippet=result.response_snippet,
+                request_headers=headers,
             )
 
             if result.succeeded:
@@ -127,4 +150,55 @@ class DeliveryAttemptService:
                 )
 
             await self._uow.commit()
-            return delivery
+
+        # Published after commit, mirroring ReplayService's publish-after-commit shape --
+        # a subscriber only ever learns about an outcome that's already durably recorded.
+        await self._publish(
+            event.tenant_id,
+            delivery=delivery,
+            breaker_state=transition.state,
+            attempt_no=attempt_no,
+            latency_ms=result.latency_ms,
+            response_status=result.status_code,
+            error_class=result.error_class,
+            request_headers=headers,
+        )
+        return delivery
+
+    async def _publish(
+        self,
+        tenant_id: uuid.UUID,
+        *,
+        delivery: Delivery,
+        breaker_state: BreakerState,
+        attempt_no: int,
+        latency_ms: int,
+        response_status: int | None,
+        error_class: AttemptErrorClass | None,
+        request_headers: dict[str, str] | None = None,
+    ) -> None:
+        if self._redis is None:
+            return
+        try:
+            await publish_attempt_event(
+                self._redis,
+                tenant_id,
+                AttemptEvent(
+                    delivery_id=delivery.id,
+                    endpoint_id=delivery.endpoint_id,
+                    event_id=delivery.event_id,
+                    attempt_no=attempt_no,
+                    delivery_state=DeliveryState(delivery.state).value,
+                    latency_ms=latency_ms,
+                    response_status=response_status,
+                    error_class=error_class.value if error_class is not None else None,
+                    next_retry_at=delivery.next_retry_at,
+                    breaker_state=breaker_state.value,
+                    created_at=self._clock(),
+                    request_headers=request_headers,
+                ),
+            )
+        except Exception:
+            # Best-effort: a Redis hiccup on the live demo feed must never fail (or roll
+            # back, it's already committed) the delivery attempt itself.
+            logger.warning("failed to publish attempt event for delivery %s", delivery.id)

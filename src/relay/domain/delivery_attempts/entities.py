@@ -33,3 +33,9 @@ class DeliveryAttempt:
     error_class: AttemptErrorClass | None = None
     request_snippet: str | None = None
     response_snippet: str | None = None
+    # The exact X-Relay-Signature/X-Relay-Timestamp/X-Relay-Delivery-Id headers this
+    # attempt sent -- None for an attempt skipped entirely by an open circuit breaker
+    # (relay.domain.endpoints.breaker.should_skip_for_open_breaker), since no request was
+    # ever built. Powers the Phase 4 console's outbound-request inspector with the real
+    # headers rather than a client-side reconstruction.
+    request_headers: dict[str, str] | None = None
