@@ -1,4 +1,4 @@
-# 0007. At-least-once delivery, not attempted exactly-once
+# 0008. At-least-once delivery, not attempted exactly-once
 
 ## Decision
 
