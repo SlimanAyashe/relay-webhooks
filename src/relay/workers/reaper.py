@@ -3,9 +3,11 @@ import logging
 import os
 from collections.abc import Callable
 
+import structlog
 from redis.asyncio import Redis
 
 from relay.infra.http_sender import HttpxOutboundSender, OutboundHttpSender
+from relay.infra.logging import configure_logging
 from relay.infra.redis import get_redis_pool
 from relay.infra.settings import get_settings
 from relay.infra.streams import ack_delivery, claim_stale_deliveries
@@ -35,17 +37,26 @@ async def run_once(
     claimed = await claim_stale_deliveries(
         redis, consumer_name, min_idle_ms=min_idle_ms, count=DEFAULT_CLAIM_COUNT
     )
-    for message_id, delivery_id in claimed:
+    for message in claimed:
+        structlog.contextvars.bind_contextvars(correlation_id=message.correlation_id)
         try:
-            await process_delivery_message(uow_factory, http_sender, redis, delivery_id)
-            await ack_delivery(redis, message_id)
+            await process_delivery_message(
+                uow_factory,
+                http_sender,
+                redis,
+                message.delivery_id,
+                correlation_id=message.correlation_id,
+            )
+            await ack_delivery(redis, message.message_id)
         except Exception:
             logger.exception(
                 "reaper failed to reprocess message %s (delivery %s); leaving unacked for the "
                 "next sweep",
-                message_id,
-                delivery_id,
+                message.message_id,
+                message.delivery_id,
             )
+        finally:
+            structlog.contextvars.clear_contextvars()
     return len(claimed)
 
 
@@ -88,5 +99,5 @@ async def run_forever(
 
 
 if __name__ == "__main__":
-    logging.basicConfig(level=get_settings().log_level)
+    configure_logging(get_settings().log_level)
     asyncio.run(run_forever())

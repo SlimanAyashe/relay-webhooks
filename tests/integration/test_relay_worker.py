@@ -56,8 +56,7 @@ async def test_run_once_fans_out_to_a_subscribed_endpoint(
 
     check_uow = UnitOfWork(sessionmaker)
     async with check_uow:
-        _message_id, delivery_id = messages[0]
-        delivery = await check_uow.deliveries.get(delivery_id)
+        delivery = await check_uow.deliveries.get(messages[0].delivery_id)
         assert delivery is not None
         assert delivery.endpoint_id == endpoint_id
         assert delivery.event_id == event_id
@@ -110,11 +109,10 @@ async def test_outbox_row_committed_before_a_relay_run_is_recovered_on_the_next_
     assert processed == 1
     messages = await read_deliveries(stream_redis, "test-consumer", count=10, block_ms=100)
     assert len(messages) == 1
-    _message_id, delivery_id = messages[0]
 
     check_uow = UnitOfWork(sessionmaker)
     async with check_uow:
-        delivery = await check_uow.deliveries.get(delivery_id)
+        delivery = await check_uow.deliveries.get(messages[0].delivery_id)
         assert delivery is not None
         assert delivery.endpoint_id == endpoint_id
         assert delivery.event_id == event_id

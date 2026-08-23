@@ -60,7 +60,7 @@ async def test_replay_starts_a_fresh_chain_and_publishes_to_the_stream(
     assert replayed.next_retry_at is None
 
     read = await read_deliveries(stream_redis, "replay-test-consumer", count=10, block_ms=100)
-    assert [delivery for _msg_id, delivery in read] == [delivery_id]
+    assert [message.delivery_id for message in read] == [delivery_id]
 
 
 async def test_replay_preserves_original_attempt_history_while_new_attempts_go_forward(

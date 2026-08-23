@@ -1,17 +1,17 @@
-import json
-import logging
 import time
 import uuid
 from collections.abc import Awaitable, Callable
 
+import structlog
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
 from starlette.responses import JSONResponse, Response
 from starlette.types import ASGIApp, Receive, Scope, Send
 
 from relay.api.errors import PROBLEM_MEDIA_TYPE
+from relay.infra.metrics import http_request_duration_seconds
 
-logger = logging.getLogger("relay.request")
+logger = structlog.get_logger("relay.request")
 
 TRACE_ID_HEADER = "X-Trace-Id"
 
@@ -21,6 +21,15 @@ class TraceIdMiddleware(BaseHTTPMiddleware):
     request.state for the error handlers to read, echoes it back on every response
     (success or failure) so a caller can quote it, and logs one structured line per
     request carrying it.
+
+    This same id is also bound into structlog's contextvars as `correlation_id` for the
+    duration of the request -- every log line anywhere in the call stack (this codebase's
+    own loggers and structlog-native ones alike, see relay.infra.logging) picks it up
+    automatically, no threading it through every function signature. relay.services.events
+    carries it onward onto the Event row so relay.workers.relay/dispatcher/reaper can bind
+    the same id into worker log lines for that event's deliveries; see
+    docs/adr/0007-phase-5-observability-and-ops.md for why this reuses trace_id rather than
+    minting a second, parallel correlation id.
     """
 
     async def dispatch(
@@ -28,24 +37,29 @@ class TraceIdMiddleware(BaseHTTPMiddleware):
     ) -> Response:
         trace_id = request.headers.get(TRACE_ID_HEADER) or str(uuid.uuid4())
         request.state.trace_id = trace_id
+        structlog.contextvars.bind_contextvars(correlation_id=trace_id)
 
-        start = time.monotonic()
-        response = await call_next(request)
-        duration_ms = (time.monotonic() - start) * 1000
+        try:
+            start = time.monotonic()
+            response = await call_next(request)
+            duration_seconds = time.monotonic() - start
 
-        response.headers[TRACE_ID_HEADER] = trace_id
-        logger.info(
-            json.dumps(
-                {
-                    "trace_id": trace_id,
-                    "method": request.method,
-                    "path": request.url.path,
-                    "status_code": response.status_code,
-                    "duration_ms": round(duration_ms, 2),
-                }
+            response.headers[TRACE_ID_HEADER] = trace_id
+            route = request.scope.get("route")
+            path_label = route.path if route is not None else request.url.path
+            http_request_duration_seconds.labels(
+                method=request.method, path=path_label, status_code=str(response.status_code)
+            ).observe(duration_seconds)
+            logger.info(
+                "request completed",
+                method=request.method,
+                path=request.url.path,
+                status_code=response.status_code,
+                duration_ms=round(duration_seconds * 1000, 2),
             )
-        )
-        return response
+            return response
+        finally:
+            structlog.contextvars.clear_contextvars()
 
 
 class MaxBodySizeMiddleware:

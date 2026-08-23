@@ -12,6 +12,7 @@ from relay.domain.endpoints import BreakerState, next_breaker_state, should_skip
 from relay.domain.errors import NotFoundError
 from relay.infra.attempt_events import AttemptEvent, publish_attempt_event
 from relay.infra.http_sender import OutboundHttpSender
+from relay.infra.metrics import attempt_outcome_label, delivery_attempts_total
 from relay.infra.settings import Settings, get_settings
 from relay.infra.signing import sign
 from relay.repositories.unit_of_work import UnitOfWork
@@ -137,9 +138,10 @@ class DeliveryAttemptService:
                 request_headers=headers,
             )
 
+            exhausted = attempt_no >= self._settings.delivery_max_attempts
             if result.succeeded:
                 delivery = await self._uow.deliveries.mark_delivered(delivery.id)
-            elif attempt_no >= self._settings.delivery_max_attempts:
+            elif exhausted:
                 delivery = await self._uow.deliveries.mark_dead(delivery.id)
             else:
                 next_retry_at = now + timedelta(
@@ -148,6 +150,13 @@ class DeliveryAttemptService:
                 delivery = await self._uow.deliveries.mark_retrying(
                     delivery.id, next_retry_at=next_retry_at
                 )
+            delivery_attempts_total.labels(
+                outcome=attempt_outcome_label(
+                    succeeded=result.succeeded,
+                    exhausted=exhausted,
+                    error_class=result.error_class.value if result.error_class else None,
+                )
+            ).inc()
 
             await self._uow.commit()
 

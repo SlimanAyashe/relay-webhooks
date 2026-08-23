@@ -4,6 +4,7 @@ import logging
 from redis.asyncio import Redis
 
 from relay.domain.outbox import OutboxEntry
+from relay.infra.logging import configure_logging
 from relay.infra.redis import get_redis_pool
 from relay.infra.settings import get_settings
 from relay.infra.streams import enqueue_delivery
@@ -41,7 +42,7 @@ async def _process_entry(uow: UnitOfWork, redis: Redis, entry: OutboxEntry) -> N
     endpoints = await uow.endpoints.list_active_subscribed(event.tenant_id, event.type)
     for endpoint in endpoints:
         delivery = await uow.deliveries.create(event_id=event.id, endpoint_id=endpoint.id)
-        await enqueue_delivery(redis, delivery.id)
+        await enqueue_delivery(redis, delivery.id, correlation_id=event.correlation_id)
     await uow.outbox.mark_processed(entry.id)
 
 
@@ -65,5 +66,5 @@ async def run_forever(*, batch_size: int | None = None, poll_interval: float | N
 
 
 if __name__ == "__main__":
-    logging.basicConfig(level=get_settings().log_level)
+    configure_logging(get_settings().log_level)
     asyncio.run(run_forever())

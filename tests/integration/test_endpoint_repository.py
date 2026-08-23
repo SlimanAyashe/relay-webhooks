@@ -2,6 +2,7 @@ import uuid
 from datetime import UTC, datetime
 
 import pytest
+from prometheus_client import REGISTRY
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from relay.domain.endpoints import BreakerState, EndpointStatus
@@ -9,10 +10,29 @@ from relay.domain.errors import NotFoundError
 from relay.repositories.endpoints.repository import EndpointRepository
 from relay.repositories.tenants.repository import TenantRepository
 
+_BREAKER_STATES = ("closed", "open", "half_open")
+
 
 async def _make_tenant_id(db_session: AsyncSession) -> uuid.UUID:
     tenant = await TenantRepository(db_session).create(name="acme")
     return tenant.id
+
+
+def _gauge_state(endpoint_id: uuid.UUID) -> str | None:
+    """Reads circuit_breaker_state's current value for one endpoint back out of the
+    default Prometheus registry. prometheus_client.Enum represents "which one of N states
+    is active" as one 0/1 series per state, each carrying the state name as a label named
+    after the metric itself -- so the active state is whichever one currently reads 1.0.
+    None means the metric has never been written for this endpoint_id at all.
+    """
+    for state in _BREAKER_STATES:
+        value = REGISTRY.get_sample_value(
+            "circuit_breaker_state",
+            {"endpoint_id": str(endpoint_id), "circuit_breaker_state": state},
+        )
+        if value == 1.0:
+            return state
+    return None
 
 
 async def test_create_and_get_round_trip(db_session: AsyncSession) -> None:
@@ -169,6 +189,51 @@ async def test_set_breaker_state_leaves_consecutive_failures_untouched(
 
     assert updated.breaker_state is BreakerState.HALF_OPEN
     assert updated.consecutive_failures == 5  # untouched
+
+
+async def test_breaker_transitions_update_the_prometheus_gauge(
+    db_session: AsyncSession,
+) -> None:
+    """Backlog item 15 (Phase 5): the circuit_breaker_state Enum gauge
+    (relay.infra.metrics) must track the endpoint's real breaker state through the full
+    closed -> open -> half_open -> closed cycle, not just the terminal value -- driven
+    directly through the repository (rather than the dispatcher end to end, as
+    tests/integration/test_circuit_breaker.py does for the domain/DB state) specifically
+    because it's the only way to observe the transient half_open value: within one real
+    delivery attempt, half_open synchronously flips to closed/open again before control
+    returns anywhere a test could inspect it.
+    """
+    tenant_id = await _make_tenant_id(db_session)
+    repo = EndpointRepository(db_session)
+    created = await repo.create(
+        tenant_id=tenant_id,
+        url="https://example.com/hook",
+        secret="s3cr3t",
+        subscribed_event_types=frozenset(),
+    )
+    opened_at = datetime(2026, 1, 1, tzinfo=UTC)
+
+    assert _gauge_state(created.id) is None  # never set yet
+
+    await repo.record_delivery_outcome(
+        created.id, breaker_state=BreakerState.CLOSED, consecutive_failures=1, opened_at=None
+    )
+    assert _gauge_state(created.id) == "closed"
+
+    await repo.record_delivery_outcome(
+        created.id, breaker_state=BreakerState.OPEN, consecutive_failures=5, opened_at=opened_at
+    )
+    assert _gauge_state(created.id) == "open"
+
+    await repo.set_breaker_state(
+        created.id, breaker_state=BreakerState.HALF_OPEN, opened_at=opened_at
+    )
+    assert _gauge_state(created.id) == "half_open"
+
+    await repo.record_delivery_outcome(
+        created.id, breaker_state=BreakerState.CLOSED, consecutive_failures=0, opened_at=None
+    )
+    assert _gauge_state(created.id) == "closed"
 
 
 async def test_list_scopes_to_tenant(db_session: AsyncSession) -> None:

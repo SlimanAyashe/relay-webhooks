@@ -30,12 +30,51 @@ previous good tag's image reference from the GHCR package list or a previous suc
 deploy's Actions log, then re-run the script against it by hand on the VPS from
 `/opt/relay`.
 
+## Nightly backup
+
+`scripts/backup_postgres.py` runs `pg_dump --format=custom` inside the running
+`relay-postgres-1` container (via `docker exec`, so no Postgres client needs to be installed
+on the host) and uploads the result to S3 as `s3://$BACKUP_S3_BUCKET/$BACKUP_S3_PREFIX/relay-<UTC
+timestamp>.dump`, using `boto3`'s normal credential chain (`AWS_ACCESS_KEY_ID` /
+`AWS_SECRET_ACCESS_KEY` / `AWS_REGION`) against real AWS S3 in production.
+
+**Scheduling on the VPS** (`scripts/systemd/relay-backup.{service,timer}` -- written and
+tested locally, but *not yet installed on the production VPS* from this repo's tooling; that
+needs whoever has SSH access to run the install steps below deliberately, the same category
+of action as everything else in `docs/PROJECT_STATUS.md`'s "requires deliberate execution,
+not automated" list):
+
+```bash
+# On the VPS, from /opt/relay, after the usual deploy has synced the repo's scripts/ there:
+sudo cp scripts/systemd/relay-backup.service scripts/systemd/relay-backup.timer /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable --now relay-backup.timer
+systemctl list-timers relay-backup.timer   # confirm the next scheduled run
+```
+
+`/opt/relay/.env` needs `BACKUP_S3_BUCKET` and real AWS credentials added alongside the
+existing `POSTGRES_PASSWORD`/`DATABASE_URL` entries before the timer's first real run.
+
 ## Restore from backup
 
-Not yet implemented -- nightly `pg_dump` to S3 and a documented, *actually executed*
-restore test are Phase 5 (optional) scope per the project plan. Until then, there is no
-backup/restore story beyond whatever the hosting provider offers at the disk level. This is
-a known limitation, not an oversight.
+`scripts/restore_drill.py` downloads the most recent backup, restores it into a **throwaway
+scratch Postgres container** (never the real one), and prints per-table row counts for
+comparison against the live database -- then tears the scratch container down. Run it with:
+
+```bash
+uv run python scripts/restore_drill.py          # tears down the scratch container after
+uv run python scripts/restore_drill.py --keep   # leaves it running for manual inspection
+```
+
+Locally, point `BACKUP_S3_ENDPOINT_URL` at a MinIO container instead of real S3 (see
+`.env.example` and `docker/compose.yml`'s `backup-drill` profile) -- the script doesn't
+change, only which S3-compatible endpoint it talks to. This has been run for real; see
+`docs/PROJECT_STATUS.md`'s Phase 5 section for the dated result (row counts matched exactly
+across all seven tables between the live database and the restored scratch container). In
+production this is the same command against real S3, restoring into a scratch container on
+whatever host runs it -- the drill should be re-run periodically, not treated as a one-time
+proof that never needs repeating; a restore procedure that hasn't been exercised recently
+against the *current* schema is not meaningfully different from one that was never tested.
 
 ## Drain the DLQ
 
@@ -55,6 +94,31 @@ curl -X POST -H "X-API-Key: $API_KEY" \
 A delivery can only be replayed while it's `dead` (`409` otherwise), and only by the
 tenant that owns it (`404` for any other tenant's key, same as every other resource --
 existence is never leaked across tenants).
+
+## Observability
+
+**Logs:** every process (`api` and all four workers) emits structured JSON to stdout --
+`docker compose logs -f <service> | jq .` works uniformly. Each line carries a
+`correlation_id` tying it back to the API request that originally created the event being
+processed, including on worker log lines produced by a retry, not just the first attempt --
+see `docs/adr/0007-phase-5-observability-and-ops.md`. Container log growth is bounded by
+Docker's own `json-file` driver options (10MB x 5 files per container; the `x-logging`
+anchor in both compose files) -- no host-level `logrotate` setup needed.
+
+**Metrics -- two scrape targets, not one:**
+
+| Target | Serves |
+| --- | --- |
+| `api:8000/metrics` | `http_request_duration_seconds` (API request latency, labeled by route/status) |
+| `dispatcher:9100/metrics` | `delivery_attempts_total` (by outcome), `circuit_breaker_state` (per endpoint), `delivery_queue_depth`, `delivery_in_flight` |
+
+Both are unauthenticated (a Prometheus scraper has no tenant API key), same as Prometheus
+targets always are. `api`'s port is already reachable at `https://api.relay.bookr.tech` in
+production -- if a real Prometheus server is ever pointed at this deployment, restrict
+`/metrics` at the Traefik layer (an IP-allowlist middleware, or simply never adding a public
+router for it) before doing so; this repo's tooling does not add or remove that restriction
+itself, the same stance taken on the egress-firewall rules below. Locally:
+`curl localhost:8000/metrics` and `curl localhost:9100/metrics`.
 
 ## Demo console abuse controls
 

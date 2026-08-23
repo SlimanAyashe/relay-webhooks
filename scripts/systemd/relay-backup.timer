@@ -1,0 +1,14 @@
+# Installed at /etc/systemd/system/relay-backup.timer on the deploy VPS -- see
+# docs/runbook.md for the install steps. 03:00 server time, +/- up to 30 minutes
+# (RandomizedDelaySec) so a fleet of similarly-configured services doesn't all hit S3 at
+# exactly the same second; irrelevant at this project's scale but costs nothing to set.
+[Unit]
+Description=Run relay-backup.service nightly
+
+[Timer]
+OnCalendar=*-*-* 03:00:00
+RandomizedDelaySec=1800
+Persistent=true
+
+[Install]
+WantedBy=timers.target

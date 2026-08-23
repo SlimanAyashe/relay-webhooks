@@ -88,6 +88,27 @@ class Settings(BaseSettings):
     sandbox_creation_rate_limit_requests_per_second: float = 0.05
     sandbox_creation_rate_limit_burst: int = 3
 
+    # Phase 5 observability & ops -- see docs/adr/0007-phase-5-observability-and-ops.md.
+
+    # Port the dispatcher's own Prometheus exporter listens on. Separate from api_port
+    # because the dispatcher (like the other workers) serves no HTTP of its own otherwise;
+    # it's the one worker process with event-driven metrics to report (delivery outcomes,
+    # breaker state, queue depth/in-flight), so it gets a minimal start_http_server() rather
+    # than every worker growing an HTTP surface.
+    # Sampled fresh on every dispatcher poll loop iteration (an XLEN/XPENDING call each,
+    # both cheap) rather than on a separate timer -- see
+    # docs/adr/0007-phase-5-observability-and-ops.md.
+    dispatcher_metrics_port: int = 9100
+
+    # Nightly backup (scripts/backup_postgres.py) and the restore drill
+    # (scripts/restore_drill.py). Point at real AWS S3 in production (leave
+    # backup_s3_endpoint_url unset); a local drill points it at MinIO or any other
+    # S3-compatible endpoint instead -- the scripts don't change, only this URL does.
+    backup_s3_bucket: str = "relay-backups"
+    backup_s3_prefix: str = "postgres"
+    backup_s3_endpoint_url: str | None = None
+    backup_postgres_container: str = "relay-postgres-1"
+
 
 @lru_cache
 def get_settings() -> Settings:
