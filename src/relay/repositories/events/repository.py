@@ -32,6 +32,7 @@ def _to_domain(model: EventModel) -> Event:
         payload=model.payload,
         idempotency_key=model.idempotency_key,
         created_at=model.created_at,
+        correlation_id=model.correlation_id,
     )
 
 
@@ -45,12 +46,14 @@ class EventRepository:
         event_type: str,
         payload: dict[str, object],
         idempotency_key: str,
+        correlation_id: str | None = None,
     ) -> Event:
         model = EventModel(
             tenant_id=tenant_id,
             type=event_type,
             payload=payload,
             idempotency_key=idempotency_key,
+            correlation_id=correlation_id,
         )
         try:
             async with self._session.begin_nested():

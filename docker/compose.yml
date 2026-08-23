@@ -1,5 +1,16 @@
 name: relay
 
+x-logging: &default-logging
+  # json-file has no size cap by default -- stdout is the only place structlog's
+  # JSON lines go (see docs/adr/0007-phase-5-observability-and-ops.md), so without
+  # this every container's log would grow unbounded on disk. Rotates at 10MB x 5
+  # files per container (50MB cap), which is Docker-level and needs no host cron/
+  # logrotate setup -- see docs/runbook.md.
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "5"
+
 services:
   postgres:
     image: postgres:16-alpine
@@ -14,6 +25,7 @@ services:
       interval: 5s
       timeout: 3s
       retries: 10
+    logging: *default-logging
 
   redis:
     image: redis:7-alpine
@@ -22,6 +34,7 @@ services:
       interval: 5s
       timeout: 3s
       retries: 10
+    logging: *default-logging
 
   api:
     build:
@@ -43,6 +56,7 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
+    logging: *default-logging
 
   relay-worker:
     build:
@@ -68,6 +82,7 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
+    logging: *default-logging
 
   dispatcher:
     build:
@@ -80,12 +95,17 @@ services:
     environment:
       DATABASE_URL: postgresql+asyncpg://relay:relay@postgres:5432/relay
       REDIS_URL: redis://redis:6379/0
+    ports:
+      # The dispatcher's own Prometheus exporter (relay.infra.metrics) -- see
+      # docs/adr/0007-phase-5-observability-and-ops.md. curl localhost:9100/metrics locally.
+      - "9100:9100"
     read_only: true
     tmpfs:
       - /tmp
     # The image's baked-in HEALTHCHECK curls /healthz, which only the api service serves --
     # workers don't listen on any port, so disable it rather than have Docker report them
-    # perpetually unhealthy.
+    # perpetually unhealthy. (The dispatcher's own :9100 is a Prometheus exporter, not a
+    # liveness endpoint, so it doesn't change that.)
     healthcheck:
       disable: true
     depends_on:
@@ -93,6 +113,29 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
+    logging: *default-logging
+
+  # S3-compatible object storage standing in for real AWS S3 in local dev, so
+  # scripts/backup_postgres.py and scripts/restore_drill.py can be exercised end to end
+  # without an AWS account -- point BACKUP_S3_ENDPOINT_URL at it (see .env.example). Not
+  # started by `make up`; bring it up on demand with
+  # `docker compose -f docker/compose.yml --profile backup-drill up -d minio`.
+  minio:
+    image: minio/minio:latest
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: minioadmin
+      MINIO_ROOT_PASSWORD: minioadmin
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    profiles: ["backup-drill"]
+    logging: *default-logging
 
   scheduler:
     build:
@@ -118,6 +161,7 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
+    logging: *default-logging
 
   reaper:
     build:
@@ -143,6 +187,7 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
+    logging: *default-logging
 
   caddy:
     image: caddy:2-alpine
@@ -152,6 +197,7 @@ services:
       - "8080:80"
     depends_on:
       - api
+    logging: *default-logging
 
 volumes:
   pgdata:

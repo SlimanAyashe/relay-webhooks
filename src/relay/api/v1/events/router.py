@@ -83,8 +83,11 @@ async def ingest_event(
     if len(raw_body) > settings.event_payload_max_bytes:
         raise PayloadTooLarge(len(raw_body), settings.event_payload_max_bytes)
 
+    correlation_id = getattr(request.state, "trace_id", None)
     service = EventIngestService(uow)
-    event = await service.ingest(auth.tenant.id, body.type, body.payload, idempotency_key)
+    event = await service.ingest(
+        auth.tenant.id, body.type, body.payload, idempotency_key, correlation_id
+    )
 
     response.headers["Location"] = f"/v1/events/{event.id}"
     return EventRead.from_domain(event)

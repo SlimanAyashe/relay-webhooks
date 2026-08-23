@@ -1,4 +1,4 @@
-.PHONY: up down logs migrate lint typecheck test build openapi
+.PHONY: up down logs migrate lint typecheck test build openapi backup restore-drill
 
 up:
 	docker compose -f docker/compose.yml up -d --build
@@ -27,3 +27,9 @@ build:
 
 openapi:
 	uv run python scripts/generate_openapi_spec.py
+
+backup:
+	uv run python scripts/backup_postgres.py
+
+restore-drill:
+	uv run python scripts/restore_drill.py

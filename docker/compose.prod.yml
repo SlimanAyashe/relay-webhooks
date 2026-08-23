@@ -11,6 +11,17 @@ name: relay
 # Expects a .env file one directory up (../.env relative to this file, i.e.
 # /opt/relay/.env on the VPS — never committed) providing POSTGRES_PASSWORD.
 
+x-logging: &default-logging
+  # json-file has no size cap by default -- stdout is the only place structlog's
+  # JSON lines go (see docs/adr/0007-phase-5-observability-and-ops.md), so without
+  # this every container's log would grow unbounded on disk. Rotates at 10MB x 5
+  # files per container (50MB cap), which is Docker-level and needs no host cron/
+  # logrotate setup -- see docs/runbook.md.
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "5"
+
 services:
   postgres:
     image: postgres:16-alpine
@@ -26,6 +37,7 @@ services:
       timeout: 3s
       retries: 10
     restart: unless-stopped
+    logging: *default-logging
 
   redis:
     image: redis:7-alpine
@@ -35,6 +47,7 @@ services:
       timeout: 3s
       retries: 10
     restart: unless-stopped
+    logging: *default-logging
 
   api:
     image: ${RELAY_IMAGE:?RELAY_IMAGE must be set to a ghcr.io image ref}
@@ -61,6 +74,7 @@ services:
       traefik.http.routers.relay.entrypoints: websecure
       traefik.http.routers.relay.tls.certresolver: letsencrypt
       traefik.http.services.relay.loadbalancer.server.port: "8000"
+    logging: *default-logging
 
   relay-worker:
     image: ${RELAY_IMAGE:?RELAY_IMAGE must be set to a ghcr.io image ref}
@@ -85,6 +99,7 @@ services:
     # perpetually unhealthy.
     healthcheck:
       disable: true
+    logging: *default-logging
 
   dispatcher:
     image: ${RELAY_IMAGE:?RELAY_IMAGE must be set to a ghcr.io image ref}
@@ -106,6 +121,7 @@ services:
     restart: unless-stopped
     healthcheck:
       disable: true
+    logging: *default-logging
 
   scheduler:
     image: ${RELAY_IMAGE:?RELAY_IMAGE must be set to a ghcr.io image ref}
@@ -127,6 +143,7 @@ services:
     restart: unless-stopped
     healthcheck:
       disable: true
+    logging: *default-logging
 
   reaper:
     image: ${RELAY_IMAGE:?RELAY_IMAGE must be set to a ghcr.io image ref}
@@ -148,6 +165,7 @@ services:
     restart: unless-stopped
     healthcheck:
       disable: true
+    logging: *default-logging
 
 volumes:
   pgdata:

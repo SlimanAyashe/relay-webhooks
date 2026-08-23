@@ -76,6 +76,31 @@ stop" -- both lists below are meant to be read together, not the "guaranteed" ha
   the requesting tenant by construction (one Redis Pub/Sub channel per tenant id, not a
   filter applied after the fact).
 
+- **Every log line, from every process, is structured JSON on stdout.** stdlib `logging`
+  (this codebase's own call sites, plus uvicorn's and SQLAlchemy's) is bridged through
+  `structlog.stdlib.ProcessorFormatter` rather than emitting a second, differently-shaped
+  stream, so `docker logs | jq` works uniformly across `api` and every worker.
+- **A single correlation id ties an ingest request to every worker log line produced while
+  delivering that event -- across process boundaries, and across retries, not just the
+  first attempt.** It is the same value returned as `X-Trace-Id` and present in every error
+  body (`docs/adr/0007-phase-5-observability-and-ops.md` explains why this reuses `trace_id`
+  rather than minting a second id); it travels via the `Event.correlation_id` column into
+  the Redis stream message that fans it out, and via a small JSON envelope in the retry-ZSET
+  member through every subsequent retry.
+- **`/healthz` (no dependencies) and `/readyz` (checks Postgres and Redis independently,
+  reporting per-dependency status) are genuinely distinct**, so deploy tooling -- and anyone
+  else -- can tell "the process is up" apart from "the process can serve traffic."
+- **Circuit breaker state and delivery outcomes are observable in near-real-time via
+  Prometheus**, not only inferable by querying Postgres: `circuit_breaker_state` tracks an
+  endpoint's real closed/open/half-open transitions, and `delivery_attempts_total` is
+  labeled by outcome (success, retry, exhausted, ssrf_blocked, timeout).
+- **A nightly database backup exists, and restoring from it has been verified to actually
+  work**, not merely scripted: `scripts/backup_postgres.py` and `scripts/restore_drill.py`
+  share one code path against any S3-compatible endpoint, and the drill -- restoring the
+  latest backup into a throwaway scratch Postgres container and comparing row counts against
+  the live database -- has been run for real, with the dated result recorded in
+  `docs/PROJECT_STATUS.md`.
+
 ## Not guaranteed
 
 - **Exactly-once external side effects.** A timeout or connection reset after the request
@@ -122,6 +147,22 @@ stop" -- both lists below are meant to be read together, not the "guaranteed" ha
   other Redis error -- event ingest fails closed (the request errors out) rather than
   silently bypassing the limit, but this is not the same as a formally verified guarantee
   under partial Redis failure modes (e.g. a failover mid-script).
+
+- **`GET /metrics` is unauthenticated, by design (a Prometheus scraper carries no tenant API
+  key) -- and this repo's own tooling does not restrict it at the network layer in
+  production.** If it is ever routed through the shared VPS's public Traefik instance,
+  operational detail becomes publicly readable; see
+  `docs/adr/0007-phase-5-observability-and-ops.md`'s tradeoff section. Not applied for the
+  same reason the egress-firewall rules aren't: touching that shared Traefik config is out
+  of bounds for this repo's tooling to do unilaterally.
+- **The nightly backup schedule (the systemd timer under `scripts/systemd/`) is documented
+  and ready to install, but has not been installed on the real production VPS from this
+  repo's own tooling** -- doing so needs SSH access to a specific, already-provisioned host,
+  the same category of action `docs/PROJECT_STATUS.md` and `docs/runbook.md` already treat
+  as requiring deliberate, out-of-band execution rather than something automated here. The
+  backup and restore *scripts* themselves, and the restore drill proving they work, have
+  been actually run -- see the guarantee above -- just not yet on an automated nightly timer
+  in production.
 
 ## Related reading
 

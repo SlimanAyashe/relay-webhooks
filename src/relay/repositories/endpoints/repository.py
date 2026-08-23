@@ -6,6 +6,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from relay.domain.endpoints import BreakerState, Endpoint, EndpointStatus
 from relay.domain.errors import NotFoundError
+from relay.infra.metrics import circuit_breaker_state
 from relay.repositories.endpoints.models import EndpointModel
 from relay.repositories.pagination import Page, decode_cursor, encode_cursor
 
@@ -96,6 +97,12 @@ class EndpointRepository:
         model.opened_at = opened_at
         await self._session.flush()
         await self._session.refresh(model)
+        # Set at flush time, not after the caller's commit (contrast
+        # DeliveryAttemptService's publish-after-commit for the SSE feed): an in-process
+        # Prometheus gauge that briefly reflects a state a rare same-transaction rollback
+        # then undoes is self-correcting on the next real transition, unlike a one-shot
+        # pub/sub notification a subscriber can't un-see.
+        circuit_breaker_state.labels(endpoint_id=str(endpoint_id)).state(breaker_state.value)
         return _to_domain(model)
 
     async def set_breaker_state(
@@ -110,6 +117,7 @@ class EndpointRepository:
         model.opened_at = opened_at
         await self._session.flush()
         await self._session.refresh(model)
+        circuit_breaker_state.labels(endpoint_id=str(endpoint_id)).state(breaker_state.value)
         return _to_domain(model)
 
     async def _get_or_raise(self, endpoint_id: uuid.UUID) -> EndpointModel:

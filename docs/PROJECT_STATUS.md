@@ -30,6 +30,11 @@ attempt timeline, signature verifier, DLQ replay UI, metrics strip, and the abus
 make a public outbound HTTP proxy safe to expose) is **complete in code, same branch as Phase 3,
 not yet merged or deployed**. See "Phase 4 — the demo console" below.
 
+Phase 5 (observability and ops -- structlog JSON, correlation IDs spanning the API and every
+worker process including across retries, Prometheus metrics, a nightly-backup script with an
+*actually executed* restore drill, and Docker-level log rotation) is **complete in code, not
+yet merged or deployed**. See "Phase 5 — observability and ops" below.
+
 ## Phase 0 — skeleton (complete, deployed)
 
 Phase 0's goal: an empty-but-real skeleton deployed to production before any feature work starts,
@@ -415,11 +420,118 @@ executing this instant -- there's no live registry for that); no Prometheus/Graf
 5, optional); the SSE query-param auth tradeoff is accepted only for that one route, not
 generalized.
 
+## Phase 5 — observability and ops (complete in code, not yet deployed)
+
+Phase 5's goal: make the system's actual runtime behavior visible without reading code or
+querying Postgres directly -- structured logs, a correlation id that survives a process
+boundary (and a retry), Prometheus metrics for the things an operator would actually watch,
+and a backup story whose restore path has been proven to work, not merely written down.
+Optional per the plan (week 9 of 9-12); nothing in Phases 1-4 depended on any of it.
+
+**Done:**
+- One new Alembic migration (`correlation_id` nullable `varchar` on `events`) -- carries the
+  ingest request's `trace_id` (`relay.api.middleware.TraceIdMiddleware`) forward so
+  `relay.workers.relay` can attach it to the Redis stream message it fans the event out to;
+  `relay.infra.streams.DeliveryMessage` (a `NamedTuple` replacing the old bare
+  `(message_id, delivery_id)` 2-tuple) carries it into the dispatcher and reaper, and
+  `relay.infra.retry_schedule.schedule_retry`/`pop_due_retries` carry it through the
+  retry-ZSET hop too (a small JSON envelope as the ZSET member instead of a bare UUID
+  string) -- so it survives every retry, not just the first attempt. `correlation_id` is
+  deliberately *not* a second id: it's the same `trace_id` value, now also bound into
+  structlog's contextvars; see `docs/adr/0007-phase-5-observability-and-ops.md`.
+- `relay.infra.logging.configure_logging()`: stdlib `logging` bridged into JSON-to-stdout via
+  `structlog.stdlib.ProcessorFormatter`, so every existing `logging.getLogger(__name__)` call
+  site (this codebase's own, plus uvicorn's and SQLAlchemy's) emits structured JSON with zero
+  per-call-site changes. `cache_logger_on_first_use=False` -- a real bug caught while writing
+  the correlation-id integration test: with caching on, whichever process-lifetime first
+  actually logs a given `structlog.get_logger(...)` proxy freezes its resolved config for the
+  rest of the process, silently ignoring later `structlog.configure()` calls (including
+  `structlog.testing.capture_logs()`'s). `TraceIdMiddleware` now binds `correlation_id` into
+  structlog's contextvars for the life of each request (and the dispatcher/reaper do the same
+  per delivery-message); uvicorn's own plain-text access log is disabled
+  (`--no-access-log` in `docker/Dockerfile`'s `CMD`) since it would otherwise print a second,
+  non-JSON line duplicating what `TraceIdMiddleware` already logs, better.
+- `relay.infra.metrics`: Prometheus collectors on the default registry, each recorded in
+  whichever process actually observes it --
+  `http_request_duration_seconds` (api, via `TraceIdMiddleware`, labeled by route *template*
+  rather than raw path to avoid cardinality blowup on ids), `delivery_attempts_total` (labeled
+  by outcome: success/retry/exhausted/ssrf_blocked/timeout, incremented in
+  `DeliveryAttemptService.attempt()`), `circuit_breaker_state` (a `prometheus_client.Enum`,
+  set in `EndpointRepository.record_delivery_outcome()`/`set_breaker_state()`), and
+  `delivery_queue_depth`/`delivery_in_flight` (sampled from Redis Streams `XLEN`/`XPENDING`
+  on every dispatcher poll iteration -- always live, no separate timer). Two scrape targets,
+  not one: `GET /metrics` on the FastAPI app (api-observed metrics only) and a minimal
+  `prometheus_client.start_http_server()` exporter on the dispatcher itself (port 9100,
+  `Settings.dispatcher_metrics_port`) for the metrics only that process observes -- see the
+  ADR for why this isn't `prometheus_client`'s multiprocess mode.
+- `/healthz`/`/readyz` needed no new work -- Phase 0 already built exactly what backlog item
+  9 asked for (a dependency-free liveness check genuinely distinct from a Postgres+Redis
+  readiness check with a per-dependency breakdown), including the failure-injection test
+  backlog item 14 asked for (`tests/unit/test_readyz.py`). Left as-is.
+- `scripts/backup_postgres.py` / `scripts/restore_drill.py`: `pg_dump --format=custom` via
+  `docker exec` against the running Postgres container (no Postgres client needed on
+  whatever host runs the script) uploaded to S3 via `boto3`, generic against any
+  S3-compatible `endpoint_url` so the identical code path runs against real AWS S3 in
+  production and MinIO locally. The restore drill downloads the latest backup, restores it
+  into a throwaway scratch Postgres container (never the real one), and compares per-table
+  row counts against the live database. `scripts/systemd/relay-backup.{service,timer}`
+  schedule the backup nightly (03:00 +/- 30min jitter) -- written and install-documented in
+  `docs/runbook.md`, **not yet installed on the real production VPS** (needs SSH access this
+  session doesn't have; see "Not done" below).
+- **The restore drill was actually executed, not just scripted** (2026-08-21, against the
+  local dev stack's real Postgres data via a local MinIO container standing in for S3 --
+  `docker compose -f docker/compose.yml --profile backup-drill up -d minio`): backup
+  `s3://relay-backups/postgres/relay-20260821T044643Z.dump` (32,515 bytes), restored into a
+  scratch container, row counts compared against the live database:
+
+  | Table | Live | Restored |
+  | --- | --- | --- |
+  | tenants | 7 | 7 |
+  | api_keys | 7 | 7 |
+  | endpoints | 8 | 8 |
+  | events | 16 | 16 |
+  | outbox | 16 | 16 |
+  | deliveries | 35 | 35 |
+  | delivery_attempts | 110 | 110 |
+
+  Exact match on every table. The scratch container was torn down afterward
+  (`scripts/restore_drill.py`'s default; `--keep` leaves it running for inspection).
+- Log rotation: `x-logging` YAML anchor (Docker's `json-file` driver, 10MB x 5 files per
+  container) applied to every service in both `docker/compose.yml` and
+  `docker/compose.prod.yml` -- no host-level `logrotate` needed, so nothing about this
+  touches the shared VPS's OS-level state.
+- `docs/adr/0007-phase-5-observability-and-ops.md`, new rows in `docs/failure-modes.md`
+  (correlation id across a retry, correlation id across the API/worker boundary, the
+  `/readyz` failure-injection test formally cited, the breaker-state gauge, the executed
+  restore drill, bounded log growth) and `docs/guarantees.md` (structured JSON logging, the
+  cross-process correlation id, the `/healthz`/`/readyz` split, Prometheus-observable
+  breaker/attempt state, the verified backup/restore story -- plus new "not guaranteed"
+  entries for `/metrics` being unauthenticated-and-not-network-restricted in production and
+  the nightly timer not yet being installed there)
+- 12 new tests (unit + integration via testcontainers, `structlog.testing.capture_logs()`
+  for the structured-logging assertions), bringing the suite to 282 total, all passing;
+  `make lint`, `make typecheck`, `uv run lint-imports`, and `uv run pip-audit` all clean;
+  `docker build` and a real `docker compose up` smoke test verified manually (`/healthz`,
+  `/readyz`, both `/metrics` targets, a real sandbox-provisioned event ingest with an
+  explicit `X-Trace-Id` confirmed to land on the `events.correlation_id` column, and JSON
+  log lines with no stray plain-text access-log noise)
+
+**Not done in Phase 5** (by design, deferred): the nightly-backup systemd timer is written
+and documented but not installed on the real production VPS -- that's an SSH-access action
+against a specific already-provisioned host, the same category of thing
+`scripts/deploy_remote.sh`'s own history required doing by hand at least once (see Phase 0
+above), and this session has no access to that host; `/metrics` is not restricted at the
+Traefik layer in production (documented as a known gap, matching the egress-firewall
+rules' own treatment); no Grafana dashboard and no Sentry (explicitly nice-to-have/skippable
+per the plan); k6 load testing and published throughput numbers are Phase 6.
+
 ## What's next
 
-Phase 4 was the last **core** phase (weeks 1-8 per the project plan) -- the project is now
-complete and demoable on its own. Everything remaining (Phase 5 observability/ops, Phase 6
-load-test/proof/polish, Phase 7 buffer/interview-prep) is optional per the plan's own scope
-discipline and can be picked up, reordered, or dropped without leaving a hole. Immediate
-next steps if continuing: merge `feat/phase-3-security-resilience` (which now also carries
-Phase 4) to `main` and deploy, since nothing in Phases 3-4 has reached production yet.
+Phase 4 was the last **core** phase (weeks 1-8 per the project plan) -- the project has been
+complete and demoable on its own since then. Phase 5 (observability/ops) is now also done.
+Everything remaining (Phase 6 load-test/proof/polish, Phase 7 buffer/interview-prep) is
+optional per the plan's own scope discipline and can be picked up, reordered, or dropped
+without leaving a hole. Immediate next steps if continuing: merge to `main` and deploy --
+Phases 3, 4, and 5 have all landed on feature branches but nothing since Phase 2 has reached
+production yet; the nightly-backup systemd timer (`scripts/systemd/relay-backup.{service,timer}`)
+also still needs installing on the real VPS once deployed (see `docs/runbook.md`).

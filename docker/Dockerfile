@@ -43,4 +43,8 @@ EXPOSE 8000
 HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
     CMD curl -f http://localhost:8000/healthz || exit 1
 
-CMD ["uvicorn", "relay.api.app:app", "--app-dir", "src", "--host", "0.0.0.0", "--port", "8000"]
+# --no-access-log: TraceIdMiddleware already logs one structured JSON line per request
+# (method, path, status_code, duration_ms, correlation_id) -- uvicorn's own default access
+# log would otherwise print a second, plain-text, non-JSON line for every request, directly
+# undermining the "every log line is machine-parseable" goal this flag exists for.
+CMD ["uvicorn", "relay.api.app:app", "--app-dir", "src", "--host", "0.0.0.0", "--port", "8000", "--no-access-log"]

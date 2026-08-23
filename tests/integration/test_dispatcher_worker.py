@@ -1,3 +1,4 @@
+import json
 import uuid
 from datetime import UTC, datetime
 
@@ -92,9 +93,9 @@ async def test_process_delivery_message_on_500_schedules_jittered_backoff(
         assert 0 <= delay < 1.0  # attempt 0 -> bound = base_seconds (1.0)
 
     due_ids = [
-        entry
+        json.loads(entry)["delivery_id"]
         for entry in await stream_redis.zrangebyscore(RETRY_ZSET, "-inf", "+inf")
-        if uuid.UUID(entry) == delivery_id
+        if json.loads(entry)["delivery_id"] == str(delivery_id)
     ]
     assert due_ids == [str(delivery_id)]
 

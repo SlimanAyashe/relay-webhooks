@@ -4,6 +4,7 @@ from datetime import UTC, datetime
 
 from redis.asyncio import Redis
 
+from relay.infra.logging import configure_logging
 from relay.infra.redis import get_redis_pool
 from relay.infra.retry_schedule import pop_due_retries
 from relay.infra.settings import get_settings
@@ -22,8 +23,8 @@ async def run_once(redis: Redis, *, limit: int = DEFAULT_POP_LIMIT) -> int:
     fresh delivery. Returns the number of retries fired.
     """
     due = await pop_due_retries(redis, datetime.now(UTC), limit=limit)
-    for delivery_id in due:
-        await enqueue_delivery(redis, delivery_id)
+    for retry in due:
+        await enqueue_delivery(redis, retry.delivery_id, correlation_id=retry.correlation_id)
     return len(due)
 
 
@@ -47,5 +48,5 @@ async def run_forever(
 
 
 if __name__ == "__main__":
-    logging.basicConfig(level=get_settings().log_level)
+    configure_logging(get_settings().log_level)
     asyncio.run(run_forever())

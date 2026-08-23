@@ -4,19 +4,31 @@ import os
 import uuid
 from collections.abc import Callable
 
+import structlog
+from prometheus_client import start_http_server
 from redis.asyncio import Redis
 
 from relay.domain.deliveries import DeliveryState
 from relay.infra.http_sender import HttpxOutboundSender, OutboundHttpSender
+from relay.infra.logging import configure_logging
+from relay.infra.metrics import delivery_in_flight, delivery_queue_depth
 from relay.infra.redis import get_redis_pool
 from relay.infra.retry_schedule import schedule_retry
 from relay.infra.settings import get_settings
-from relay.infra.streams import ack_delivery, ensure_consumer_group, read_deliveries
+from relay.infra.streams import (
+    DeliveryMessage,
+    ack_delivery,
+    ensure_consumer_group,
+    pending_count,
+    read_deliveries,
+    stream_depth,
+)
 from relay.repositories.unit_of_work import UnitOfWork, get_unit_of_work
 from relay.services.deliveries.service import DeliveryAttemptService
 from relay.workers.shutdown import install_sigterm_handler
 
 logger = logging.getLogger(__name__)
+_structured_logger = structlog.get_logger(__name__)
 
 
 async def process_delivery_message(
@@ -24,15 +36,21 @@ async def process_delivery_message(
     http_sender: OutboundHttpSender,
     redis: Redis,
     delivery_id: uuid.UUID,
+    *,
+    correlation_id: str | None = None,
 ) -> None:
     """Runs one delivery attempt and, if it needs a retry, schedules it in the Redis ZSET.
     Shared by the dispatcher's normal consumer loop and the reaper's reclaimed-message path
     -- both are ultimately just "process this delivery_id" once they have one in hand.
+    `correlation_id` (read off the stream message the caller consumed) is forwarded to
+    schedule_retry so it survives into the next attempt too, not just this one.
     """
     service = DeliveryAttemptService(uow_factory(), http_sender, redis=redis)
     delivery = await service.attempt(delivery_id)
     if delivery.state is DeliveryState.RETRYING and delivery.next_retry_at is not None:
-        await schedule_retry(redis, delivery.id, delivery.next_retry_at)
+        await schedule_retry(
+            redis, delivery.id, delivery.next_retry_at, correlation_id=correlation_id
+        )
 
 
 async def run_forever(
@@ -42,6 +60,7 @@ async def run_forever(
     per_endpoint_concurrency: int | None = None,
     http_sender: OutboundHttpSender | None = None,
     uow_factory: Callable[[], UnitOfWork] = get_unit_of_work,
+    metrics_port: int | None = None,
 ) -> None:
     settings = get_settings()
     consumer_name = consumer_name or f"dispatcher-{os.getpid()}"
@@ -49,11 +68,19 @@ async def run_forever(
     per_endpoint_concurrency = (
         per_endpoint_concurrency or settings.dispatcher_per_endpoint_concurrency
     )
+    metrics_port = metrics_port if metrics_port is not None else settings.dispatcher_metrics_port
     redis = get_redis_pool()
     owned_sender = HttpxOutboundSender() if http_sender is None else None
     sender: OutboundHttpSender = http_sender if http_sender is not None else owned_sender  # type: ignore[assignment]
     shutdown = install_sigterm_handler()
     await ensure_consumer_group(redis)
+
+    # The dispatcher is the one worker process with event-driven metrics to report
+    # (attempts by outcome, breaker state, queue depth/in-flight -- see relay.infra.metrics);
+    # a minimal exporter here is smaller than giving every worker an HTTP surface. 0 disables
+    # it (used by tests that don't want to bind a real port).
+    if metrics_port:
+        start_http_server(metrics_port)
 
     semaphore = asyncio.Semaphore(concurrency)
     # Created lazily, one per endpoint id seen so far, held for the duration of one
@@ -72,22 +99,24 @@ async def run_forever(
         return sem
 
     logger.info(
-        "dispatcher worker %s starting (concurrency=%s, per_endpoint_concurrency=%s)",
+        "dispatcher worker %s starting (concurrency=%s, per_endpoint_concurrency=%s, "
+        "metrics_port=%s)",
         consumer_name,
         concurrency,
         per_endpoint_concurrency,
+        metrics_port or "disabled",
     )
     try:
         while not shutdown.is_set():
             messages = await read_deliveries(redis, consumer_name, count=concurrency, block_ms=1000)
-            for message_id, delivery_id in messages:
+            await _sample_queue_metrics(redis)
+            for message in messages:
                 await semaphore.acquire()
                 task = asyncio.create_task(
                     _handle_and_ack(
                         redis,
                         sender,
-                        message_id,
-                        delivery_id,
+                        message,
                         semaphore,
                         uow_factory,
                         endpoint_semaphore,
@@ -103,32 +132,55 @@ async def run_forever(
     logger.info("dispatcher worker %s stopped", consumer_name)
 
 
+async def _sample_queue_metrics(redis: Redis) -> None:
+    """Refreshes the queue-depth/in-flight gauges every poll iteration -- both are cheap
+    Redis calls (XLEN, XPENDING with no range), so a live sample beats a periodically-shipped
+    stale one and needs no separate timer.
+    """
+    delivery_queue_depth.set(await stream_depth(redis))
+    delivery_in_flight.set(await pending_count(redis))
+
+
 async def _handle_and_ack(
     redis: Redis,
     http_sender: OutboundHttpSender,
-    message_id: str,
-    delivery_id: uuid.UUID,
+    message: DeliveryMessage,
     semaphore: asyncio.Semaphore,
     uow_factory: Callable[[], UnitOfWork],
     endpoint_semaphore: Callable[[uuid.UUID], asyncio.Semaphore] | None = None,
 ) -> None:
     acquired_endpoint_sem: asyncio.Semaphore | None = None
+    structlog.contextvars.bind_contextvars(correlation_id=message.correlation_id)
     try:
         if endpoint_semaphore is not None:
-            endpoint_id = await _lookup_endpoint_id(uow_factory, delivery_id)
+            endpoint_id = await _lookup_endpoint_id(uow_factory, message.delivery_id)
             if endpoint_id is not None:
                 acquired_endpoint_sem = endpoint_semaphore(endpoint_id)
                 await acquired_endpoint_sem.acquire()
 
-        await process_delivery_message(uow_factory, http_sender, redis, delivery_id)
-        await ack_delivery(redis, message_id)
+        await process_delivery_message(
+            uow_factory,
+            http_sender,
+            redis,
+            message.delivery_id,
+            correlation_id=message.correlation_id,
+        )
+        await ack_delivery(redis, message.message_id)
+        _structured_logger.info(
+            "delivery attempt processed",
+            delivery_id=str(message.delivery_id),
+            message_id=message.message_id,
+        )
     except Exception:
         logger.exception(
-            "delivery attempt failed for message %s (delivery %s)", message_id, delivery_id
+            "delivery attempt failed for message %s (delivery %s)",
+            message.message_id,
+            message.delivery_id,
         )
         # Deliberately not acked -- the reaper's XAUTOCLAIM sweep reclaims and retries this
         # message once it's been idle past REAPER_MIN_IDLE_MS.
     finally:
+        structlog.contextvars.clear_contextvars()
         if acquired_endpoint_sem is not None:
             acquired_endpoint_sem.release()
         semaphore.release()
@@ -149,5 +201,5 @@ async def _lookup_endpoint_id(
 
 
 if __name__ == "__main__":
-    logging.basicConfig(level=get_settings().log_level)
+    configure_logging(get_settings().log_level)
     asyncio.run(run_forever())

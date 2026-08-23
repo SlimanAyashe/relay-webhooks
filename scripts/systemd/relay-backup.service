@@ -1,0 +1,14 @@
+# Installed at /etc/systemd/system/relay-backup.service on the deploy VPS. Runs
+# scripts/backup_postgres.py once, using the same .env the app containers read (for
+# BACKUP_S3_BUCKET / AWS credentials / POSTGRES_PASSWORD) -- see docs/runbook.md for the
+# install steps. Triggered by relay-backup.timer, never run directly by anything else.
+[Unit]
+Description=Relay nightly Postgres backup to S3
+Wants=network-online.target
+After=network-online.target docker.service
+
+[Service]
+Type=oneshot
+WorkingDirectory=/opt/relay
+EnvironmentFile=/opt/relay/.env
+ExecStart=/usr/bin/env uv run python scripts/backup_postgres.py

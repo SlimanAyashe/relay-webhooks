@@ -31,10 +31,17 @@ class EventIngestService:
         event_type: str,
         payload: dict[str, object],
         idempotency_key: str,
+        correlation_id: str | None = None,
     ) -> Event:
         """Idempotency-Key semantics: same key + identical (type, payload) returns the
         original event unchanged (no second row inserted); same key + a differing body
         raises DifferingBodyConflict.
+
+        `correlation_id` is the ingest request's trace id (relay.api.middleware), stored on
+        the event so relay.workers.relay can carry it into the Redis stream message and every
+        worker log line for this event's deliveries -- including retries -- can be bound to
+        it. Not re-stamped on an idempotent replay; the original request's id is what stays
+        attached to the row.
         """
         async with self._uow:
             existing = await self._uow.events.get_by_idempotency_key(tenant_id, idempotency_key)
@@ -47,6 +54,7 @@ class EventIngestService:
                     event_type=event_type,
                     payload=payload,
                     idempotency_key=idempotency_key,
+                    correlation_id=correlation_id,
                 )
                 # Same transaction as the event insert: a `202` is only ever returned
                 # after both rows are durably committed together, so the relay can never

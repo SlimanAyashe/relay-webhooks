@@ -6,9 +6,10 @@ backoff, per-endpoint circuit breakers, and a replayable dead-letter queue.
 
 See [RELAY-PLAN.md](../RELAY-PLAN.md) for the full architecture and build phases.
 
-**Status:** Phases 0–3 (skeleton, API/domain, delivery engine, security & resilience) are
-complete in code; see [docs/PROJECT_STATUS.md](docs/PROJECT_STATUS.md) for what's deployed
-right now versus what's only landed on `main`.
+**Status:** Phases 0–5 (skeleton, API/domain, delivery engine, security & resilience, the
+public demo console, and observability/ops) are complete in code; see
+[docs/PROJECT_STATUS.md](docs/PROJECT_STATUS.md) for what's deployed right now versus what's
+only landed on a feature branch.
 
 See [docs/guarantees.md](docs/guarantees.md) for what this system promises — and exactly
 where each promise stops — and [docs/failure-modes.md](docs/failure-modes.md) for the
@@ -17,16 +18,18 @@ running "if it dies here, then what, and which test proves it" log behind those 
 
 ## Architecture (current)
 
-`api` (FastAPI) talks to `infra` (SQLAlchemy async engine, Redis client, Settings) directly for
-now, since there's no business logic yet to justify a `services`/`repositories` layer in between
-— `import-linter` already enforces the intended `api → services → repositories → infra` layering
-in CI so the boundary can't erode once real logic lands. `/healthz` is a liveness check with no
-dependencies; `/readyz` checks Postgres and Redis independently and returns a per-dependency
-breakdown, which is what the deploy pipeline polls after every swap. Locally, Caddy reverse-proxies
-to the API over plain HTTP (`docker/compose.yml`). In production, TLS and routing are handled by a
-Traefik instance already running on the deploy VPS (shared with other services on that box) via
-Docker labels on the `api` container — see `docs/adr/0002-shared-vps-traefik.md` for why that
-differs from the local setup.
+`api → services → repositories → infra` (plus `workers`, a sibling of `api`, for the delivery
+engine's background processes) is the enforced layering, checked by `import-linter` in CI;
+`domain` depends on nothing. `/healthz` is a liveness check with no dependencies; `/readyz`
+checks Postgres and Redis independently and returns a per-dependency breakdown, which is what
+the deploy pipeline polls after every swap. Every process logs structured JSON to stdout
+(`relay.infra.logging`) and a single correlation id ties an API request to every worker log
+line produced while delivering the event it created — see
+[docs/adr/0007-phase-5-observability-and-ops.md](docs/adr/0007-phase-5-observability-and-ops.md).
+Locally, Caddy reverse-proxies to the API over plain HTTP (`docker/compose.yml`). In production,
+TLS and routing are handled by a Traefik instance already running on the deploy VPS (shared with
+other services on that box) via Docker labels on the `api` container — see
+`docs/adr/0002-shared-vps-traefik.md` for why that differs from the local setup.
 
 ## Local setup
 
@@ -55,6 +58,17 @@ Documented in [.env.example](.env.example) — copy it to `.env` before running 
 | `DATABASE_URL` | Async Postgres connection string (`asyncpg` driver) |
 | `REDIS_URL` | Redis connection string |
 | `API_PORT` | Port the API listens on inside its container |
+| `DISPATCHER_METRICS_PORT` | Port the dispatcher's own Prometheus exporter listens on |
+| `BACKUP_S3_BUCKET` / `BACKUP_S3_PREFIX` / `BACKUP_S3_ENDPOINT_URL` | Nightly backup destination (see `docs/runbook.md`) |
+
+The full list, including Phase 2–5 worker/security/sandbox/observability tuning, is in
+[.env.example](.env.example) with a comment on every variable.
+
+## Observability
+
+`GET /metrics` (api) and `GET :9100/metrics` (the dispatcher's own exporter) serve Prometheus
+text exposition — see [docs/runbook.md](docs/runbook.md)'s Observability section for exactly
+what each one carries and why there are two targets instead of one.
 
 ## Docker image
 
@@ -75,9 +89,15 @@ See [docs/guarantees.md](docs/guarantees.md)'s "Not guaranteed" section and
 (no ordering, no global fairness, DNS rebinding mitigated but not eliminated, etc.). A few
 worth calling out here specifically:
 
-- No public demo console yet ("Delivery Theater") — that's Phase 4, still ahead.
-- No nightly backup/restore — Phase 5 (optional) scope, not yet started.
 - The VPS egress firewall rules documented in `docs/runbook.md` as defense-in-depth behind
   the application-layer SSRF guard have not been applied to the production VPS yet (it's
   shared with other pre-existing services, so this needs deliberate coordination, not
   unilateral automation).
+- `GET /metrics` is unauthenticated and not restricted at the network layer in production —
+  same reasoning and same "not this repo's tooling's call to make unilaterally" as the
+  egress-firewall rules above.
+- The nightly-backup systemd timer (`scripts/systemd/`) is written and documented but not
+  yet installed on the production VPS — the backup/restore *scripts* have been actually run
+  and verified (see `docs/PROJECT_STATUS.md`), just not yet on an automated schedule there.
+- No Grafana dashboard, no Sentry, no k6 load-test numbers yet — explicitly nice-to-have or
+  Phase 6 scope per the project plan, not oversights.

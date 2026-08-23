@@ -5,6 +5,7 @@ from redis.asyncio import Redis
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
 from relay.infra.http_sender import OutboundHttpResult
+from relay.infra.streams import DeliveryMessage
 from relay.repositories.unit_of_work import UnitOfWork
 from relay.workers.dispatcher import _handle_and_ack
 
@@ -88,8 +89,7 @@ async def test_per_endpoint_semaphore_caps_concurrent_attempts_against_one_endpo
             _handle_and_ack(
                 stream_redis,
                 sender,
-                f"fake-message-{i}",
-                delivery_id,
+                DeliveryMessage(f"fake-message-{i}", delivery_id, correlation_id=None),
                 global_semaphore,
                 lambda: UnitOfWork(sessionmaker),
                 endpoint_semaphore,
@@ -121,8 +121,7 @@ async def test_without_the_endpoint_semaphore_all_four_run_concurrently(
             _handle_and_ack(
                 stream_redis,
                 sender,
-                f"fake-message-{i}",
-                delivery_id,
+                DeliveryMessage(f"fake-message-{i}", delivery_id, correlation_id=None),
                 global_semaphore,
                 lambda: UnitOfWork(sessionmaker),
                 None,
