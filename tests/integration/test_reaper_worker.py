@@ -82,3 +82,51 @@ async def test_run_once_leaves_recently_read_messages_alone(
     reclaimed = await run_once(stream_redis, sender, consumer_name="reaper-1", min_idle_ms=60_000)
 
     assert reclaimed == 0
+
+
+async def test_run_once_acks_a_reclaimed_message_whose_delivery_no_longer_exists(
+    db_engine: AsyncEngine, stream_redis: Redis
+) -> None:
+    """The reaper is the loop that would otherwise spin on such a message forever: it
+    reclaims anything idle past the threshold, and a delivery deleted out from under it
+    (its endpoint was removed, cascading) fails every single time. Acking is the terminal
+    answer -- without it, one deleted endpoint leaves permanent work on the stream.
+    """
+    sessionmaker = _sessionmaker(db_engine)
+    delivery_id = await _seed_delivery(sessionmaker)
+    await enqueue_delivery(stream_redis, delivery_id)
+    await read_deliveries(stream_redis, "dead-consumer", count=10, block_ms=100)
+
+    uow = UnitOfWork(sessionmaker)
+    async with uow:
+        delivery = await uow.deliveries.get(delivery_id)
+        assert delivery is not None
+        await uow.endpoints.delete(delivery.endpoint_id)
+        await uow.commit()
+
+    sender = FakeOutboundHttpSender([])
+    reclaimed = await run_once(
+        stream_redis,
+        sender,
+        consumer_name="reaper-test",
+        min_idle_ms=0,
+        uow_factory=lambda: UnitOfWork(sessionmaker),
+    )
+
+    assert reclaimed == 1
+    assert sender.calls == []
+    pending = await stream_redis.xpending(DELIVERY_STREAM, DISPATCH_GROUP)
+    assert pending["pending"] == 0
+
+    # And a second sweep finds nothing left to reclaim -- the message is genuinely gone,
+    # not merely quiet for one tick.
+    assert (
+        await run_once(
+            stream_redis,
+            sender,
+            consumer_name="reaper-test",
+            min_idle_ms=0,
+            uow_factory=lambda: UnitOfWork(sessionmaker),
+        )
+        == 0
+    )

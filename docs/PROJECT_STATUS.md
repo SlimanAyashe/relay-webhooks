@@ -641,6 +641,45 @@ now does.
 - **Backups are not off-host** — MinIO on the same VPS, for want of an AWS account.
 - **The Redis stale-connection defect found by the chaos suite is not fixed** (below).
 
+### Console and delivery fixes, 2026-08-25
+
+Four defects the live verification surfaced, all now fixed and deployed:
+
+1. **The console's per-endpoint "Trigger event" button never targeted that endpoint.** An event
+   is addressed to a *type* and fans out to every endpoint subscribed to it — correct
+   behaviour, misleading affordance, made worse by the payload carrying a decorative
+   `endpoint_id`. Replaced with one trigger control that names how many destinations it will
+   fan out to.
+2. **The live attempt timeline invented attempt numbers.** A delivery deferred by an open
+   circuit breaker publishes an event even though no request is made — and it published
+   `attempt_count`, reusing the last real attempt's number, so the console showed two rows
+   numbered e.g. "4", one of which had no row in `delivery_attempts` at all. Deferrals now
+   carry `attempt_no: null` and the console renders them as deferrals. Verified against the
+   database: `attempt_count` equals the recorded rows, and no attempt row has ever had zero
+   latency.
+3. **Endpoints could not be removed** from the console, though the API has always supported it.
+   Added — which required fixing (4) first.
+4. **Deleting an endpoint left poison messages on the stream.** Deletion cascades to its
+   deliveries, so their queued messages named rows that no longer existed; each raised
+   `NotFoundError`, went unacked, and was reclaimed and re-failed by the reaper every 30
+   seconds, forever. The reaper now acks and drops them.
+
+**The near-miss worth recording.** The first version of (4) dropped the message in the
+*dispatcher* too. That was wrong, and the live suite caught it within one run:
+`relay.workers.relay` publishes to the stream *inside* its fan-out transaction, so a dispatcher
+routinely sees a message microseconds before the delivery row it names is committed. Acking on
+first sight turned a self-healing race into silent, permanent loss — two SSRF probe deliveries
+were accepted with a `202` and then never attempted, left `pending` with zero attempts. Only the
+reaper may draw that conclusion, because it sees a message only after a 30s idle threshold, four
+orders of magnitude longer than the commit window. Pinned by
+`tests/integration/test_dispatcher_worker.py::test_a_message_whose_delivery_is_not_yet_committed_is_left_for_the_reaper`.
+
+That in-transaction publish is a real wrinkle, left as-is deliberately: it is self-healing given
+correct `NotFoundError` handling, whereas committing first and publishing second trades it for a
+silent failure mode with no recovery path at all (a committed delivery with no message, and
+nothing sweeping for one). Worth revisiting with a pending-delivery sweeper; not worth inverting
+blind.
+
 
 ## What's next
 

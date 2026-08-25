@@ -84,7 +84,11 @@ class DeliveryAttemptService:
                     event.tenant_id,
                     delivery=delivery,
                     breaker_state=endpoint.breaker_state,
-                    attempt_no=delivery.attempt_count,
+                    # Not an attempt, so no attempt number: nothing was sent, and no row is
+                    # written to delivery_attempts either. Publishing `attempt_count` here
+                    # used to reuse the last real attempt's number on the live timeline,
+                    # which made the feed disagree with the durable record.
+                    attempt_no=None,
                     latency_ms=0,
                     response_status=None,
                     error_class=None,
@@ -180,7 +184,7 @@ class DeliveryAttemptService:
         *,
         delivery: Delivery,
         breaker_state: BreakerState,
-        attempt_no: int,
+        attempt_no: int | None,
         latency_ms: int,
         response_status: int | None,
         error_class: AttemptErrorClass | None,

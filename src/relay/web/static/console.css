@@ -90,3 +90,11 @@ table.timeline th, table.timeline td { text-align: left; padding: 0.3rem 0.5rem;
 .metrics span { display: block; font-size: 1.4rem; font-weight: 700; }
 .metrics small { color: #888; }
 pre { white-space: pre-wrap; word-break: break-all; font-size: 0.8rem; }
+
+/* A deferred row is not a delivery attempt -- an open circuit breaker declined to send, so
+   no request was made and no attempt was recorded. Muted so the eye skips them when
+   scanning for real outcomes, rather than counting them as failures. */
+.timeline tr.deferred {
+  opacity: 0.55;
+  font-style: italic;
+}

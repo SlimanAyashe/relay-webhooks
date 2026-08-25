@@ -1,3 +1,5 @@
+import asyncio
+import json
 import uuid
 from datetime import UTC, datetime, timedelta
 
@@ -8,6 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 from relay.domain.deliveries import DeliveryState
 from relay.domain.delivery_attempts import AttemptErrorClass
 from relay.domain.endpoints import BreakerState
+from relay.infra.attempt_events import ATTEMPT_CHANNEL_PREFIX
 from relay.infra.http_sender import OutboundHttpResult
 from relay.infra.settings import get_settings
 from relay.repositories.unit_of_work import UnitOfWork
@@ -102,3 +105,60 @@ async def test_full_breaker_cycle_closed_open_half_open_closed(
     assert endpoint.opened_at is None
     assert delivery is not None
     assert delivery.state is DeliveryState.DELIVERED
+
+
+async def test_a_breaker_deferral_is_published_without_an_attempt_number(
+    db_engine: AsyncEngine, stream_redis: Redis
+) -> None:
+    """A deferral is not an attempt: no request is built, no `delivery_attempts` row is
+    written, and the live timeline must not imply otherwise. It used to publish
+    `attempt_count`, which reused the number of the last real attempt -- so the console
+    showed two rows numbered "4", one of which had no counterpart in the durable record.
+    """
+    settings = get_settings()
+    sessionmaker = _sessionmaker(db_engine)
+    delivery_id, endpoint_id = await _seed_delivery(sessionmaker)
+
+    uow = UnitOfWork(sessionmaker)
+    async with uow:
+        await uow.endpoints.set_breaker_state(
+            endpoint_id, breaker_state=BreakerState.OPEN, opened_at=datetime.now(UTC)
+        )
+        await uow.commit()
+
+    published: list[str] = []
+    pubsub = stream_redis.pubsub()
+    async with uow:
+        delivery = await uow.deliveries.get(delivery_id)
+        assert delivery is not None
+        event = await uow.events.get(delivery.event_id)
+        assert event is not None
+    await pubsub.subscribe(f"{ATTEMPT_CHANNEL_PREFIX}{event.tenant_id}")
+    try:
+        # Inside the cooldown, so this is deferred: nothing is sent, and the fake's empty
+        # script would raise if anything were.
+        await process_delivery_message(
+            lambda: UnitOfWork(sessionmaker),
+            FakeOutboundHttpSender([]),
+            stream_redis,
+            delivery_id,
+        )
+        deadline = asyncio.get_running_loop().time() + 5.0
+        while asyncio.get_running_loop().time() < deadline and not published:
+            message = await pubsub.get_message(ignore_subscribe_messages=True, timeout=1.0)
+            if message is not None:
+                published.append(message["data"])
+    finally:
+        await pubsub.aclose()
+
+    assert published, "a deferral must still be visible on the live timeline"
+    deferral = json.loads(published[0])
+    assert deferral["attempt_no"] is None
+    assert deferral["latency_ms"] == 0
+    assert deferral["breaker_state"] == BreakerState.OPEN.value
+
+    # ...and it left no attempt row behind, which is what the timeline was disagreeing with.
+    async with uow:
+        attempts = await uow.delivery_attempts.list_for_delivery(delivery_id)
+    assert attempts == []
+    assert settings.breaker_cooldown_seconds > 0

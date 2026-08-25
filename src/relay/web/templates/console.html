@@ -36,14 +36,15 @@
       <section class="panel">
         <h2>2. Register a destination</h2>
         <label>
-          Mock receiver
+          Test destination -- a stand-in for a customer's server, so you can watch
+          each failure path without running one yourself. Relay's delivery of it is real.
           <select x-model="destinationChoice">
             <option value="/mock/always-200">always-200 -- happy path</option>
             <option value="/mock/always-500">always-500 -- retries exhaust, breaker trips, lands in DLQ</option>
             <option value="/mock/slow-8s">slow-8s -- times out</option>
             <option value="/mock/flaky-50">flaky-50 -- 50% partial failure</option>
             <option value="/mock/redirect-to-metadata">redirect-to-metadata -- SSRF guard blocks it</option>
-            <option value="custom">custom URL...</option>
+            <option value="custom">your own URL -- receive a real signed delivery</option>
           </select>
         </label>
         <label x-show="destinationChoice === 'custom'">
@@ -60,14 +61,27 @@
             <li>
               <span class="pill" :class="'breaker-' + ep.breaker_state" x-text="ep.breaker_state"></span>
               <code x-text="ep.url"></code>
-              <button class="link" @click="triggerEvent(ep)" :disabled="loading.event">Trigger event</button>
+              <button class="link" @click="deleteEndpoint(ep)" :disabled="loading.endpoint">Remove</button>
             </li>
           </template>
         </ul>
       </section>
 
+      <section class="panel" x-show="endpoints.length">
+        <h2>3. Trigger an event</h2>
+        <p>
+          One <code>demo.triggered</code> event fans out to
+          <strong x-text="endpoints.length"></strong>
+          <span x-text="endpoints.length === 1 ? 'destination' : 'destinations'"></span>
+          -- every endpoint subscribed to that type, which is what a webhook relay does.
+          There is no "send to just this one" API: subscribe destinations to different event
+          types if you want to target them separately.
+        </p>
+        <button @click="triggerEvent()" :disabled="loading.event">Trigger event</button>
+      </section>
+
       <section class="panel" x-show="lastTrigger">
-        <h2>3. Ingest response</h2>
+        <h2>4. Ingest response</h2>
         <p>
           <strong x-text="lastTrigger && lastTrigger.status"></strong>
           -- Location: <code x-text="lastTrigger && lastTrigger.location"></code>
@@ -86,16 +100,23 @@
 
       <section class="panel">
         <h2>Live attempt timeline</h2>
+        <p>
+          Every delivery for this sandbox, newest first -- so <em>#</em> is the attempt number
+          within its own delivery and the same numbers recur per destination. Rows marked
+          <em>deferred</em> are not attempts: an open circuit breaker declined to send, so no
+          request was made and no attempt was recorded.
+        </p>
         <table class="timeline">
           <thead>
-            <tr><th>#</th><th>status</th><th>latency</th><th>error</th><th>next retry</th><th></th></tr>
+            <tr><th>#</th><th>destination</th><th>status</th><th>latency</th><th>error</th><th>next retry</th><th></th></tr>
           </thead>
           <tbody>
             <template x-for="(a, i) in timeline" :key="i">
-              <tr>
-                <td x-text="a.attempt_no"></td>
-                <td x-text="a.response_status ?? a.delivery_state"></td>
-                <td x-text="a.latency_ms + 'ms'"></td>
+              <tr :class="a.attempt_no === null ? 'deferred' : ''">
+                <td x-text="a.attempt_no ?? '--'"></td>
+                <td><code x-text="endpointLabel(a.endpoint_id)"></code></td>
+                <td x-text="a.attempt_no === null ? 'deferred -- breaker ' + a.breaker_state : (a.response_status ?? a.delivery_state)"></td>
+                <td x-text="a.attempt_no === null ? '--' : a.latency_ms + 'ms'"></td>
                 <td x-text="a.error_class ?? '--'"></td>
                 <td x-text="a.next_retry_at ? new Date(a.next_retry_at).toLocaleTimeString() : '--'"></td>
                 <td><button class="link" @click="inspect(a)">inspect</button></td>
@@ -114,11 +135,21 @@
         <h2>Verify a signature</h2>
         <p>Paste the endpoint secret to verify a captured attempt, or tamper the body to watch it fail.</p>
         <label>Endpoint secret <input type="text" x-model="verify.secret" placeholder="from registration, shown once" /></label>
-        <label>Body <textarea x-model="verify.body"></textarea></label>
+        <label>Body <textarea x-model="verify.body" placeholder="the raw bytes as sent -- not re-indented JSON"></textarea></label>
         <label>Timestamp <input type="number" x-model="verify.timestamp" /></label>
         <label>Signature <input type="text" x-model="verify.signature" /></label>
+        <label>Tolerance (seconds) <input type="number" min="0" x-model="verify.toleranceSeconds" placeholder="300 -- raise it to check an older capture" /></label>
         <button @click="verifySignature()">Verify</button>
-        <p x-show="verify.result !== null" :class="verify.result ? 'ok' : 'error'" x-text="verify.result === null ? '' : (verify.result ? 'valid' : 'invalid')"></p>
+        <template x-if="verify.outcome">
+          <div :class="verify.outcome.valid ? 'ok' : 'error'">
+            <p><strong x-text="verify.outcome.valid ? 'valid' : 'invalid'"></strong> -- <span x-text="verify.outcome.detail"></span></p>
+            <p x-show="verify.outcome.reason === 'timestamp_outside_tolerance'">
+              The HMAC was never compared. This is the replay-window check, not a bad signature --
+              raise the tolerance above <span x-text="verify.outcome.skew_seconds"></span>s to check the signature itself.
+              <button class="link" @click="verifyIgnoringAge()">Check signature anyway</button>
+            </p>
+          </div>
+        </template>
       </section>
 
       <section class="panel">

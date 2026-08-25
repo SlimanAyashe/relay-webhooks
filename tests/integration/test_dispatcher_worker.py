@@ -1,3 +1,4 @@
+import asyncio
 import json
 import uuid
 from datetime import UTC, datetime
@@ -14,10 +15,16 @@ from relay.domain.delivery_attempts import AttemptErrorClass
 from relay.infra.http_sender import HttpxOutboundSender, OutboundHttpResult
 from relay.infra.retry_schedule import RETRY_ZSET
 from relay.infra.settings import Settings, get_settings
+from relay.infra.streams import (
+    DELIVERY_STREAM,
+    DISPATCH_GROUP,
+    enqueue_delivery,
+    read_deliveries,
+)
 from relay.repositories.delivery_attempts.models import DeliveryAttemptModel
 from relay.repositories.unit_of_work import UnitOfWork
 from relay.services.deliveries.service import DeliveryAttemptService
-from relay.workers.dispatcher import process_delivery_message
+from relay.workers.dispatcher import _handle_and_ack, process_delivery_message
 from tests.fakes import FakeOutboundHttpSender
 
 
@@ -279,3 +286,35 @@ async def test_retry_budget_exhaustion_moves_delivery_to_dead(db_engine: AsyncEn
     assert delivery.state is DeliveryState.DEAD
     assert delivery.attempt_count == settings.delivery_max_attempts
     assert delivery.next_retry_at is None
+
+
+async def test_a_message_whose_delivery_is_not_yet_committed_is_left_for_the_reaper(
+    db_engine: AsyncEngine, stream_redis: Redis
+) -> None:
+    """The fan-out publishes to the stream inside its transaction (relay.workers.relay), so
+    a dispatcher can read a message microseconds before the delivery row it names exists.
+    "Not found" there means "not yet", and acking on first sight would silently lose an
+    event that was accepted with a 202 -- so the dispatcher must leave it pending and let
+    the reaper decide, once the message has been idle long enough for any commit to land.
+    """
+    sessionmaker = _sessionmaker(db_engine)
+    # A delivery id that has no row at all -- the same thing the dispatcher sees mid-race.
+    missing_delivery_id = uuid.uuid4()
+    await enqueue_delivery(stream_redis, missing_delivery_id)
+    messages = await read_deliveries(stream_redis, "dispatcher-test", count=10, block_ms=100)
+    assert len(messages) == 1
+
+    sender = FakeOutboundHttpSender([])
+    await _handle_and_ack(
+        stream_redis,
+        sender,
+        messages[0],
+        asyncio.Semaphore(1),
+        lambda: UnitOfWork(sessionmaker),
+    )
+
+    assert sender.calls == []
+    pending = await stream_redis.xpending(DELIVERY_STREAM, DISPATCH_GROUP)
+    assert pending["pending"] == 1, (
+        "the dispatcher must not ack a delivery it merely cannot see yet"
+    )

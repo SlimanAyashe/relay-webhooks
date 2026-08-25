@@ -28,7 +28,10 @@ class AttemptEvent:
     delivery_id: uuid.UUID
     endpoint_id: uuid.UUID
     event_id: uuid.UUID
-    attempt_no: int
+    # None for an outcome that was not an attempt: a delivery deferred by an open circuit
+    # breaker never built a request, so numbering it would both invent an attempt that has
+    # no row in delivery_attempts and collide with the number of the real attempt before it.
+    attempt_no: int | None
     delivery_state: str
     latency_ms: int
     response_status: int | None
