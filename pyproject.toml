@@ -63,6 +63,11 @@ select = [
 ]
 ignore = []
 
+[tool.ruff.lint.per-file-ignores]
+# The diagram generator is a layout table: SVG path data and coordinate rows
+# are single logical units that read worse wrapped than they do long.
+"scripts/gen_architecture_diagram.py" = ["E501"]
+
 [tool.ruff.lint.isort]
 known-first-party = ["relay"]
 

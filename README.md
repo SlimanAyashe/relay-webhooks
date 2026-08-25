@@ -14,23 +14,15 @@
 **[Demo GIF placeholder -- see `docs/assets/demo.gif` note in the source of this file. Not
 recorded yet.]**
 
-```mermaid
-flowchart LR
-    C[Client] -->|POST /v1/events<br/>Idempotency-Key| API[FastAPI]
-    API -->|single TX| PG[(PostgreSQL)]
-    PG -.->|events + outbox<br/>same transaction| PG
-    PG -->|SELECT ... FOR UPDATE<br/>SKIP LOCKED| RELAY[Relay / Dispatcher]
-    RELAY -->|XADD| RS[Redis Streams]
-    RS -->|consumer group<br/>XREADGROUP / XAUTOCLAIM| W[Async Worker Pool]
-    W --> SSRF{SSRF Guard<br/>DNS resolve + CIDR deny}
-    SSRF -->|blocked| DLQ[(Dead Letter)]
-    SSRF -->|allowed| DEST[Customer Endpoint]
-    DEST -->|2xx| DONE[Delivered]
-    DEST -->|non-2xx / timeout| ZS[(Redis ZSET<br/>next_retry_at)]
-    ZS -->|scheduler tick| RS
-    W -->|attempt row| PG
-    W -->|publish| PS[Redis Pub/Sub] --> SSE[SSE -> Demo Console]
-```
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/assets/architecture-dark.svg">
+  <img alt="Relay architecture: a tenant POSTs an event to the FastAPI ingest, which commits the event row and an outbox row in one PostgreSQL transaction; relay-worker fans that outbox row out onto a Redis stream, dispatchers sign and send each delivery through an SSRF guard to the customer endpoint, and a retry sorted set, scheduler, and reaper carry failed or orphaned work back onto the same stream." src="docs/assets/architecture-light.svg">
+</picture>
+
+<!--
+  Regenerate both SVGs with:  python3 scripts/gen_architecture_diagram.py
+  Edit the layout tables in that script rather than the SVGs by hand.
+-->
 
 A webhook delivery service: tenants register HTTPS endpoints, subscribe to event types, and POST
 events; Relay durably fans them out with at-least-once delivery, HMAC signing, jittered retry
