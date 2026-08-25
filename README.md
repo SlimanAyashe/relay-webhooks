@@ -11,9 +11,6 @@
   timeline show retries, the breaker trip, and the DLQ fill.
 -->
 
-**[Demo GIF placeholder -- see `docs/assets/demo.gif` note in the source of this file. Not
-recorded yet.]**
-
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/assets/architecture-dark.svg">
   <img alt="Relay architecture: a tenant POSTs an event to the FastAPI ingest, which commits the event row and an outbox row in one PostgreSQL transaction; relay-worker fans that outbox row out onto a Redis stream, dispatchers sign and send each delivery through an SSRF guard to the customer endpoint, and a retry sorted set, scheduler, and reaper carry failed or orphaned work back onto the same stream." src="docs/assets/architecture-light.svg">
