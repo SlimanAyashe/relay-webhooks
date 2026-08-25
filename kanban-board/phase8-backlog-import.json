@@ -1,0 +1,102 @@
+{
+  "backlog": [
+    {
+      "id": "backlog-p8-01",
+      "title": "Audit the twelve failure-scenario tests against the actual suite and close every gap",
+      "description": "Map each of the plan's twelve failure scenarios (crash after commit before publish, SKIP LOCKED race, XAUTOCLAIM reclaim, duplicate after unacked HTTP send, idempotent ingest, 409 on differing body, jittered retry on 500, timeout recorded as timeout, ZSET-to-stream promotion, breaker closed->open->half-open->closed, forbidden-redirect block, auth rejection and tenant isolation) to a named, passing test in the repo. Write any that are missing. The list is the plan's stated definition of done, so no scenario may rest on \"probably covered.\"",
+      "priority": "high",
+      "createdAt": 1
+    },
+    {
+      "id": "backlog-p8-02",
+      "title": "Chaos test: relay dead between DB commit and Redis publish, event still delivers",
+      "description": "Against the real compose stack: stop the relay container, POST an event (expect `202`), verify the outbox row sits `pending` with nothing in the stream, then start the relay and assert the delivery completes. Process-level proof that \"a 202 is never a lie,\" not a testcontainers simulation of it.",
+      "priority": "high",
+      "createdAt": 2
+    },
+    {
+      "id": "backlog-p8-03",
+      "title": "Chaos test: docker kill a dispatcher mid-delivery, XAUTOCLAIM redelivers under the original ID",
+      "description": "Point an endpoint at the `slow-8s` mock, `docker kill -s KILL` the dispatcher while the attempt is in flight, and assert the reaper reclaims the message under its original stream ID and the event is ultimately delivered -- with the duplicate visible at the receiver, since that duplicate is the at-least-once claim made concrete.",
+      "priority": "high",
+      "createdAt": 3
+    },
+    {
+      "id": "backlog-p8-04",
+      "title": "Chaos test: restart Postgres and Redis under in-flight traffic with zero accepted-event loss",
+      "description": "While a steady trickle of events flows, `docker restart` Postgres, then Redis, then reconcile: every event that received a `202` must reach a terminal delivery state (delivered or dead) after recovery, and none may vanish. Duplicates are acceptable; loss is the failure condition.",
+      "priority": "medium",
+      "createdAt": 4
+    },
+    {
+      "id": "backlog-p8-05",
+      "title": "Build a guarantee-pinned live smoke suite under tests/e2e/ parameterized by base URL",
+      "description": "One test per promise in docs/guarantees.md, executed over the public API via a sandbox tenant: provision sandbox, register the `always-200` mock, trigger an event, poll the attempt log until delivered, verify `202` + `Location`, idempotent re-POST yields one event, differing body yields `409`, exhausted retries land in the DLQ and replay works. Parameterized by base URL so the identical suite runs against local compose and `https://api.<domain>`.",
+      "priority": "high",
+      "createdAt": 5
+    },
+    {
+      "id": "backlog-p8-06",
+      "title": "Run the live smoke suite from the deploy job after the /readyz gate",
+      "description": "Wire the smoke suite into deploy.yml after the health gate, so a deploy is \"done\" only when the guarantees pass against the new container, not merely when it reports ready. A smoke failure is handled like a failed gate: investigate, roll back with `deploy.sh <previous-sha>`.",
+      "priority": "medium",
+      "createdAt": 6
+    },
+    {
+      "id": "backlog-p8-07",
+      "title": "Live SSRF probe: forbidden destinations rejected on prod with no connection made",
+      "description": "From outside, register destinations for loopback, an RFC1918 address, `169.254.169.254`, a public hostname that resolves to a private IP (the rebinding shape), and the `redirect-to-metadata` mock; assert each attempt records `ssrf_blocked` and the attempt log shows no connection was ever made to the forbidden address.",
+      "priority": "high",
+      "createdAt": 7
+    },
+    {
+      "id": "backlog-p8-08",
+      "title": "Verify the VPS egress firewall blocks private ranges independently of the app",
+      "description": "`docker exec` into the dispatcher container and attempt raw TCP connections to RFC1918, link-local, and metadata addresses, asserting the network layer refuses them even with application validation out of the picture. The defense-in-depth claim is only a claim until this has been observed on the real VPS; record the nftables/UFW rule set alongside the result.",
+      "priority": "high",
+      "createdAt": 8
+    },
+    {
+      "id": "backlog-p8-09",
+      "title": "Live abuse-control checks: quotas, rate limit, TTL, and payload cap on prod",
+      "description": "Against the deployed console API: the 4th endpoint and 21st event are rejected, the per-IP sandbox-creation limit returns `429` with `Retry-After`, a 65 KB payload returns `413`, and a sandbox key is rejected after its 60-minute TTL (clock-skipped locally, spot-checked for real in prod).",
+      "priority": "medium",
+      "createdAt": 9
+    },
+    {
+      "id": "backlog-p8-10",
+      "title": "Live auth checks: revoked key and cross-tenant isolation on prod",
+      "description": "Revoke a sandbox key and assert `401` on the next request; with two live sandboxes, assert tenant A's key cannot read tenant B's endpoints, deliveries, attempt log, or DLQ -- the isolation claim tested through the real deployed auth path, not just the service layer.",
+      "priority": "medium",
+      "createdAt": 10
+    },
+    {
+      "id": "backlog-p8-11",
+      "title": "Deploy-gate drill: a failing image aborts the swap; rehearse the rollback one-liner",
+      "description": "Deploy an image whose `/readyz` deliberately fails and assert the deploy aborts with the previous container still serving traffic throughout. Then run `deploy.sh <previous-sha>` once for real, time it, and record both drills with dates in docs/runbook.md.",
+      "priority": "medium",
+      "createdAt": 11
+    },
+    {
+      "id": "backlog-p8-12",
+      "title": "Verify the nightly backup actually fires on the VPS and restore a real prod dump",
+      "description": "Confirm the backup timer is installed and has fired within the last 24 hours (currently the script exists but the timer is not installed on prod -- this ticket closes that gap), then restore the newest dump into a scratch Postgres container and diff row counts against prod. A backup that has never restored a production dump proves nothing.",
+      "priority": "high",
+      "createdAt": 12
+    },
+    {
+      "id": "backlog-p8-13",
+      "title": "Verify a live delivery's HMAC signature with an independent, out-of-repo script",
+      "description": "Reimplement `timestamp.body` HMAC-SHA256 verification in a standalone script that imports nothing from `src/`, verify a real delivery captured at a receiver against the endpoint secret, then tamper one byte and assert failure -- proving the documented signing contract is sufficient for a real consumer, not merely internally consistent.",
+      "priority": "medium",
+      "createdAt": 13
+    },
+    {
+      "id": "backlog-p8-14",
+      "title": "Reconcile docs/failure-modes.md: every Proof cell names a real, passing test",
+      "description": "Walk the failure-modes table and require each row's Proof cell to point at a named test that exists and passes; the chaos tests from this phase fill the \"chaos test\" cells that were previously aspirational. Rows with no honest proof either get one written or get their claim reworded.",
+      "priority": "low",
+      "createdAt": 14
+    }
+  ]
+}

@@ -21,19 +21,26 @@ deploy, 2026-08-15/16" under Phase 2 below for what the deploy actually took (th
 bugs, none of them in the application code).
 
 Phase 3 (security and resilience — HMAC signing, the SSRF guard incl. the IP-pinned transport,
-per-endpoint circuit breaker, DLQ + replay endpoint, per-tenant rate limiting) is **complete in
-code on `feat/phase-3-security-resilience`, not yet merged to `main` or deployed**. See "Phase 3
+per-endpoint circuit breaker, DLQ + replay endpoint, per-tenant rate limiting) is **complete and
+deployed** as of the Phase 8 deploy below, though still unmerged to `main`. See "Phase 3
 — security and resilience" below for what's built and what's deliberately deferred.
 
 Phase 4 (the public demo console -- mock receivers, self-serve sandbox provisioning, the SSE
 attempt timeline, signature verifier, DLQ replay UI, metrics strip, and the abuse controls that
-make a public outbound HTTP proxy safe to expose) is **complete in code, same branch as Phase 3,
-not yet merged or deployed**. See "Phase 4 — the demo console" below.
+make a public outbound HTTP proxy safe to expose) is **complete and deployed**, same branch as
+Phase 3, still unmerged to `main`. See "Phase 4 — the demo console" below.
 
 Phase 5 (observability and ops -- structlog JSON, correlation IDs spanning the API and every
 worker process including across retries, Prometheus metrics, a nightly-backup script with an
-*actually executed* restore drill, and Docker-level log rotation) is **complete in code, not
-yet merged or deployed**. See "Phase 5 — observability and ops" below.
+*actually executed* restore drill, and Docker-level log rotation) is **complete and deployed**,
+with the backup timer now installed and firing on the VPS (Phase 8). See "Phase 5 — observability and ops" below.
+
+Phase 8 (live verification) is **complete, and everything in Phases 3-5 above is now deployed
+and verified in production**: `relay:3597334` runs the production overlay behind Traefik at
+`https://relay.bookr.tech`, the guarantee-pinned live suite passes 44/44 against it, and the
+deploy-gate, rollback, backup-timer and restore drills have all been executed with dated
+results in `docs/runbook.md`'s drill log. The chaos suite is written but has **not** been run
+here. See "Phase 8 — live verification" below for what it proved and the four things it found.
 
 ## Phase 0 — skeleton (complete, deployed)
 
@@ -279,7 +286,7 @@ rounds to reach a green `/readyz`, none of them application bugs:
 None of the three would have been caught by CI — they're all VPS-state problems, invisible from
 the repo. Worth a skim before the next deploy in case any of the same drift has crept back.
 
-## Phase 3 — security and resilience (complete in code, not yet deployed)
+## Phase 3 — security and resilience (complete, deployed 2026-08-24)
 
 Phase 3's goal: turn Phase 2's delivery engine, which would call whatever URL an endpoint has
 with no signing and no breaker, into something safe to eventually put behind a public demo
@@ -344,7 +351,7 @@ shared with other pre-existing services and touching its firewall state needs de
 coordination, not something this repo's tooling should do unilaterally); no nightly backup/restore
 (Phase 5, optional); no demo console yet to actually exercise any of this publicly (Phase 4).
 
-## Phase 4 — the demo console (complete in code, not yet deployed)
+## Phase 4 — the demo console (complete, deployed 2026-08-24)
 
 Phase 4's goal: make everything Phase 1-3 built actually visible, in under a minute, to
 someone with no account and no context -- and do it without weakening any guarantee Phase
@@ -389,9 +396,12 @@ sandbox provisioning/quotas, and the SSE/metrics endpoints.
 - Outbound-request inspector: `delivery_attempts` gained a `request_headers` JSONB column
   (the real `X-Relay-Signature`/`X-Relay-Timestamp`/`X-Relay-Delivery-Id` sent, not a
   client-side reconstruction), surfaced on both the DLQ listing and the live SSE feed
-- `POST /v1/sandbox/verify-signature`: a thin wrapper over the real `relay.infra.signing.verify()`,
-  so the console's tamper-and-fail demo exercises the actual verifier, not a JS
-  reimplementation of it
+- `POST /v1/sandbox/verify-signature`: a thin wrapper over the real
+  `relay.infra.signing.verify_with_reason()`, so the console's tamper-and-fail demo
+  exercises the actual verifier, not a JS reimplementation of it. The response carries
+  `reason`/`detail`/`skew_seconds` alongside `valid`, because a bare boolean reported an
+  aged-out capture and a genuinely bad signature identically -- and accepts an optional
+  `tolerance_seconds` so a delivery captured earlier can still be audited
 - `GET /v1/sandbox/metrics`: queue depth, in-flight, p95 latency, and success rate over a
   bounded recent attempt sample, computed on request from existing tables
   (`relay.services.deliveries.metrics_service`) rather than standing up Phase 5's
@@ -420,7 +430,7 @@ executing this instant -- there's no live registry for that); no Prometheus/Graf
 5, optional); the SSE query-param auth tradeoff is accepted only for that one route, not
 generalized.
 
-## Phase 5 — observability and ops (complete in code, not yet deployed)
+## Phase 5 — observability and ops (complete, deployed 2026-08-24)
 
 Phase 5's goal: make the system's actual runtime behavior visible without reading code or
 querying Postgres directly -- structured logs, a correlation id that survives a process
@@ -524,6 +534,113 @@ above), and this session has no access to that host; `/metrics` is not restricte
 Traefik layer in production (documented as a known gap, matching the egress-firewall
 rules' own treatment); no Grafana dashboard and no Sentry (explicitly nice-to-have/skippable
 per the plan); k6 load testing and published throughput numbers are Phase 6.
+
+## Phase 8 — live verification (complete)
+
+The question this phase answers is "how do you know it works in production?", and the whole
+point is that "the unit tests pass" is the answer it exists to disqualify. Decisions and their
+alternatives are in `docs/adr/0009-phase-8-live-verification.md`; how to run any of it is in
+`docs/live-verification.md`.
+
+### What was built
+
+- **`tests/unit/test_failure_scenario_audit.py`** — the plan's twelve failure scenarios as
+  data, each mapped to named tests, with the build failing if any named test disappears.
+  `docs/failure-scenarios.md` is the same table in prose and is checked against it.
+- **`tests/unit/test_failure_modes_proofs.py`** — parses `docs/failure-modes.md` and requires
+  every row's Proof cell to name a test that exists; rows resting on a manual drill are capped
+  so "no automated proof" can't quietly spread.
+- **`tests/e2e/`** — a guarantee-pinned live smoke suite, one test per promise in
+  `docs/guarantees.md`, driven over the public API via sandbox tenants and observed through
+  the same SSE attempt timeline the console uses. Parameterized by base URL; wired into
+  `deploy.yml` after the `/readyz` gate.
+- **`tests/chaos/`** — three container-killing tests (relay dead across ingest, dispatcher
+  `kill -9` mid-delivery, Postgres/Redis restarted under traffic).
+- **`scripts/verify_egress_firewall.py`** and **`scripts/verify_signature_independently.py`** —
+  the network-layer probe, and a receiver-side HMAC verifier that imports nothing from `src/`.
+
+Neither live suite imports `relay.*`: they talk to the deployment over HTTP and to its
+containers over `docker`, because an import of the application's own code would quietly turn a
+live test back into an in-process one.
+
+### Deployed, 2026-08-24
+
+`relay.bookr.tech` was serving Traefik's 404 — the running stack was the *dev* compose file,
+which carries no Traefik labels, so the domain had no route to Relay at all. Deploying the
+production overlay (`docker/compose.prod.yml`, image `relay:3597334`) restored it; TLS via the
+existing Let's Encrypt cert, `/readyz` green, `api.relay.bookr.tech` routing too.
+
+### What the live run found
+
+Four things, none of which the CI suite could have surfaced:
+
+1. **A deploy is health-gated, not zero-downtime.** The gate drill deployed a deliberately
+   broken image and the gate held — swap aborted, previous image restored automatically, exit
+   1. But a one-second availability poll against the public domain measured **74 seconds of
+   errors** while that played out, because Compose replaces the running container before the
+   gate can ask anything. The ticket's expectation ("the previous container still serving
+   traffic throughout") was simply wrong about the design. `docs/guarantees.md` now says so,
+   and the rollback one-liner was rehearsed at 11s wall clock / ~9s visible.
+2. **The nightly backup timer could never have worked as documented.** Its `ExecStart` was
+   `uv run python scripts/backup_postgres.py` with `WorkingDirectory=/opt/relay` — but a
+   deploy puts a compose file and an `.env` there, not a checkout of this repo, so there was
+   nothing for `uv` to resolve. `backup_postgres.py` and `restore_drill.py` now read the
+   environment directly instead of importing `relay.infra.settings`, run from a small ops-only
+   virtualenv, and take their credentials from a separate `backup.env` so worker containers
+   never load the keys that can read every database dump. Installed, fired, and the restore
+   drill (now diffing against the live database, not just printing counts) verified that run's
+   own dump. It has since fired twice unattended on its own 03:00 schedule, which is the claim
+   that actually matters -- a timer that only ever ran because somebody typed `systemctl start`
+   has not been shown to work.
+3. **There is no network-layer egress defense.** The probe opened a TCP connection from inside
+   the dispatcher container to the host's own SSH port over every Docker bridge gateway.
+   `DOCKER-USER` empty, `INPUT` policy `ACCEPT`, `ufw` inactive. It also showed the rule set
+   this repo had documented **would not have fixed it**: `DOCKER-USER` lives in `FORWARD`, and
+   container-to-host traffic goes through `INPUT`. Corrected rules are in `docs/runbook.md`,
+   unapplied — this VPS is shared with unrelated production services, and that boundary
+   predates this phase.
+4. **One live test was wrong, not the system.** It asserted a replayed delivery's attempt
+   numbering continues past the exhausted chain; `reset_for_replay` deliberately restarts a
+   fresh chain at 1. Fixed to assert the documented behaviour, with the preservation half left
+   where it belongs (`tests/integration/test_replay_service.py`).
+
+### What the chaos suite found, 2026-08-25
+
+It took three runs to get green, and the breakdown is the argument for having written it:
+
+- **Two of my own test bugs.** The first asserted the receiver had logged the in-flight
+  request at the moment of the kill — but the receiver's log line is written on *completion*,
+  eight seconds later, so it demanded proof of completion at the exact instant the premise
+  requires the request to be incomplete. The second was a kill window wide enough (1s poll +
+  3s sleep) to land after the dispatcher's own 5s read timeout had already recorded the
+  attempt, testing nothing.
+- **One real defect in the application.** `relay.infra.redis` builds its pooled client with
+  no `health_check_interval`, so after a Redis restart the pool keeps handing out connections
+  the server has closed. Each raises `ConnectionError: Connection closed by server` on first
+  use and costs one `500` to a real caller — observed up to 20 seconds after Redis was
+  healthy again, and in one run it broke an unrelated test that ran two minutes later. This
+  is a *recovery* defect and is not the same thing as the deliberate fail-closed behaviour
+  during an outage that `docs/guarantees.md` documents. **Not fixed.** The safe half of the
+  remedy is `health_check_interval=30`; the fuller `retry_on_error=[ConnectionError]` would
+  also retry a failed `XADD` in `enqueue_delivery` and so could double-enqueue a delivery —
+  permitted under at-least-once, but a guarantees-level decision rather than a config tweak.
+
+All three tests otherwise passed against production: no accepted event was lost across a
+Postgres and a Redis restart under traffic, a `kill -9`'d dispatcher's message was reclaimed
+under its original stream id with the duplicate visible at the receiver, and an event accepted
+while the relay was stopped sat `pending` in the outbox and delivered when it came back.
+
+Also closed a genuine coverage gap while auditing: scenario #5 says "one event row, *one
+delivery*" and nothing asserted the delivery half —
+`tests/integration/test_relay_worker.py::test_duplicate_ingest_fans_out_exactly_one_delivery`
+now does.
+
+### Not done
+
+- **Egress rules remain unapplied** (see above).
+- **Backups are not off-host** — MinIO on the same VPS, for want of an AWS account.
+- **The Redis stale-connection defect found by the chaos suite is not fixed** (below).
+
 
 ## What's next
 

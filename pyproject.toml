@@ -93,8 +93,14 @@ module = "tests.*"
 disallow_untyped_defs = false
 
 [tool.pytest.ini_options]
+# tests/e2e and tests/chaos are deliberately absent: they need a running deployment (and,
+# for chaos, permission to kill its containers), so they are opt-in by path rather than
+# something a bare `pytest` picks up. See docs/live-verification.md.
 testpaths = ["tests/unit", "tests/integration"]
 asyncio_mode = "auto"
+markers = [
+    "slow: live tests that wait out real backoff or breaker cooldowns (minutes, not seconds)",
+]
 
 [tool.importlinter]
 root_packages = ["relay"]
