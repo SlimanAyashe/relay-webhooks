@@ -9,7 +9,17 @@ set -euo pipefail
 
 IMAGE="$1" # e.g. ghcr.io/<owner>/<repo>:<sha>
 
-docker pull "$IMAGE"
+# RELAY_SKIP_PULL=1 uses an image that is already on this host instead of pulling one.
+# Exists for the deploy-gate drill (docs/runbook.md), which deliberately deploys a locally
+# built image whose /readyz fails to watch the gate abort the swap -- never for a real
+# deploy, where skipping the pull would silently ship whatever stale tag happens to be
+# lying around.
+if [ "${RELAY_SKIP_PULL:-0}" = "1" ]; then
+    echo "RELAY_SKIP_PULL=1: using local image $IMAGE without pulling (drill only)."
+    docker image inspect "$IMAGE" > /dev/null
+else
+    docker pull "$IMAGE"
+fi
 
 # Migrate before the swap so the new schema is in place before new code runs
 # against it (expand/contract keeps this a non-event for compatible changes).

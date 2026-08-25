@@ -2,6 +2,11 @@
 # scripts/backup_postgres.py once, using the same .env the app containers read (for
 # BACKUP_S3_BUCKET / AWS credentials / POSTGRES_PASSWORD) -- see docs/runbook.md for the
 # install steps. Triggered by relay-backup.timer, never run directly by anything else.
+#
+# ExecStart runs a small ops-only virtualenv (boto3, nothing else), not `uv run` against a
+# checkout: a deploy puts a compose file, an .env and scripts/ into /opt/relay -- it does
+# not put this repo there, so `uv run` had nothing to resolve. Installing the timer for
+# real in Phase 8 is what turned that into a discovered fact rather than an assumption.
 [Unit]
 Description=Relay nightly Postgres backup to S3
 Wants=network-online.target
@@ -11,4 +16,8 @@ After=network-online.target docker.service
 Type=oneshot
 WorkingDirectory=/opt/relay
 EnvironmentFile=/opt/relay/.env
-ExecStart=/usr/bin/env uv run python scripts/backup_postgres.py
+# Backup destination + object-store credentials live in their own file, not in the .env the
+# api and worker containers load: a delivery worker has no business holding the credentials
+# that can read every database dump, and `docker inspect` would otherwise show them.
+EnvironmentFile=-/opt/relay/backup.env
+ExecStart=/opt/relay/.venv/bin/python /opt/relay/scripts/backup_postgres.py

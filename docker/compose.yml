@@ -127,8 +127,12 @@ services:
       MINIO_ROOT_USER: minioadmin
       MINIO_ROOT_PASSWORD: minioadmin
     ports:
-      - "9000:9000"
-      - "9001:9001"
+      # Loopback-only: MinIO here runs with well-known default credentials, and this
+      # compose file is also what the backup drill uses on the real (public) VPS -- see
+      # docs/runbook.md. Publishing it on 0.0.0.0 would put an open object store with
+      # `minioadmin:minioadmin` on the internet.
+      - "127.0.0.1:9000:9000"
+      - "127.0.0.1:9001:9001"
     healthcheck:
       test: ["CMD", "mc", "ready", "local"]
       interval: 5s

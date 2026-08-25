@@ -9,6 +9,7 @@ from prometheus_client import start_http_server
 from redis.asyncio import Redis
 
 from relay.domain.deliveries import DeliveryState
+from relay.domain.errors import NotFoundError
 from relay.infra.http_sender import HttpxOutboundSender, OutboundHttpSender
 from relay.infra.logging import configure_logging
 from relay.infra.metrics import delivery_in_flight, delivery_queue_depth
@@ -170,6 +171,25 @@ async def _handle_and_ack(
             "delivery attempt processed",
             delivery_id=str(message.delivery_id),
             message_id=message.message_id,
+        )
+    except NotFoundError:
+        # Deliberately NOT acked, even though this looks like a message for a delivery that
+        # will never exist. relay.workers.relay publishes to the stream *inside* the
+        # fan-out transaction, so a dispatcher can read a message microseconds before the
+        # delivery row it names is committed -- "not found" here usually means "not yet".
+        # Acking on first sight would turn that race into silent, permanent loss of an
+        # event that was accepted with a 202.
+        #
+        # Leaving it unacked lets the reaper reclaim it once it has been idle past
+        # reaper_min_idle_ms, by which point the commit has long since landed. The reaper is
+        # also the only place allowed to conclude the delivery is genuinely gone (an
+        # endpoint deleted, cascading to its deliveries) and drop it -- see
+        # relay.workers.reaper.run_once.
+        logger.warning(
+            "delivery %s not found for message %s; leaving unacked for the reaper (most "
+            "likely the fan-out transaction has not committed yet)",
+            message.delivery_id,
+            message.message_id,
         )
     except Exception:
         logger.exception(

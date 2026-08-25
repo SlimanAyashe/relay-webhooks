@@ -6,6 +6,7 @@ from collections.abc import Callable
 import structlog
 from redis.asyncio import Redis
 
+from relay.domain.errors import NotFoundError
 from relay.infra.http_sender import HttpxOutboundSender, OutboundHttpSender
 from relay.infra.logging import configure_logging
 from relay.infra.redis import get_redis_pool
@@ -48,6 +49,22 @@ async def run_once(
                 correlation_id=message.correlation_id,
             )
             await ack_delivery(redis, message.message_id)
+        except NotFoundError:
+            # Only here, never in the dispatcher. This message has been idle past
+            # min_idle_ms (30s by default) -- four orders of magnitude longer than the
+            # window in which relay.workers.relay's in-transaction publish can make a
+            # message visible before its delivery row commits. A delivery that still cannot
+            # be found after that is genuinely gone, most likely because its endpoint was
+            # deleted and cascaded, and no number of further sweeps will conjure it back.
+            #
+            # Acking is what stops one deleted endpoint leaving permanent work on the
+            # stream, reclaimed and re-failed every 30 seconds forever.
+            await ack_delivery(redis, message.message_id)
+            logger.warning(
+                "reaper dropping message %s: delivery %s no longer exists",
+                message.message_id,
+                message.delivery_id,
+            )
         except Exception:
             logger.exception(
                 "reaper failed to reprocess message %s (delivery %s); leaving unacked for the "

@@ -5,12 +5,18 @@ This is the actually-*executed* half of the Phase 5 backup story: scripts/backup
 being merely correct isn't the claim docs/runbook.md makes; a drill that was actually run and
 whose output is recorded is. See docs/PROJECT_STATUS.md for the dated record of a real run.
 
-Usage: uv run python scripts/restore_drill.py [--keep]
+Usage: uv run python scripts/restore_drill.py [--keep] [--no-compare-live]
 
 --keep leaves the scratch container running afterward (for manual inspection) instead of
-tearing it down.
+tearing it down. --no-compare-live skips the comparison against the live database, for
+running the drill somewhere the live Postgres container isn't reachable.
+
+Configuration comes from the environment, not from `relay.infra.settings` -- same reason as
+scripts/backup_postgres.py: this has to be runnable on a deploy host that has an .env and a
+compose file but no checkout of this repo.
 """
 
+import os
 import subprocess
 import sys
 import time
@@ -18,7 +24,9 @@ import uuid
 
 import boto3
 
-from relay.infra.settings import get_settings
+DEFAULT_BUCKET = "relay-backups"
+DEFAULT_PREFIX = "postgres"
+DEFAULT_LIVE_CONTAINER = "relay-postgres-1"
 
 VERIFY_TABLES = (
     "tenants",
@@ -129,29 +137,51 @@ def row_counts(container: str, *, db: str, user: str, tables: tuple[str, ...]) -
     return counts
 
 
+def compare_to_live(restored: dict[str, int], live: dict[str, int]) -> tuple[bool, list[str]]:
+    """A restore that "worked" is one whose contents match the database it came from.
+
+    The live database keeps taking writes while the drill runs, so the honest expectation is
+    `live >= restored` per table, not equality: rows added after the dump was taken are drift,
+    not data loss. `restored > live` is the alarming direction -- it means rows that existed
+    at dump time are gone now -- and an empty restore of a non-empty table means the dump or
+    the restore silently did nothing.
+    """
+    problems: list[str] = []
+    for table, restored_count in restored.items():
+        live_count = live.get(table)
+        if live_count is None:
+            problems.append(f"{table}: missing from the live database entirely")
+        elif restored_count > live_count:
+            problems.append(
+                f"{table}: restored {restored_count} rows but live has only {live_count} -- "
+                "rows present at dump time have since disappeared"
+            )
+        elif restored_count == 0 and live_count > 0:
+            problems.append(
+                f"{table}: restored 0 rows against {live_count} live -- the dump or the "
+                "restore did nothing for this table"
+            )
+    return not problems, problems
+
+
 def teardown(container: str) -> None:
     subprocess.run(["docker", "rm", "-f", container], capture_output=True, check=False)
 
 
 def main() -> int:
-    settings = get_settings()
     keep = "--keep" in sys.argv
+    compare_live = "--no-compare-live" not in sys.argv
+    bucket = os.environ.get("BACKUP_S3_BUCKET", DEFAULT_BUCKET)
+    prefix = os.environ.get("BACKUP_S3_PREFIX", DEFAULT_PREFIX)
+    endpoint_url = os.environ.get("BACKUP_S3_ENDPOINT_URL") or None
+    live_container = os.environ.get("BACKUP_POSTGRES_CONTAINER", DEFAULT_LIVE_CONTAINER)
 
-    key = latest_backup_key(
-        settings.backup_s3_bucket,
-        settings.backup_s3_prefix,
-        endpoint_url=settings.backup_s3_endpoint_url,
-    )
+    key = latest_backup_key(bucket, prefix, endpoint_url=endpoint_url)
     if key is None:
-        print(
-            f"no backups found under s3://{settings.backup_s3_bucket}/{settings.backup_s3_prefix}/",
-            file=sys.stderr,
-        )
+        print(f"no backups found under s3://{bucket}/{prefix}/", file=sys.stderr)
         return 1
-    print(f"restoring s3://{settings.backup_s3_bucket}/{key}")
-    dump = download_backup(
-        settings.backup_s3_bucket, key, endpoint_url=settings.backup_s3_endpoint_url
-    )
+    print(f"restoring s3://{bucket}/{key}")
+    dump = download_backup(bucket, key, endpoint_url=endpoint_url)
     print(f"downloaded {len(dump):,} bytes")
 
     container = f"relay-restore-drill-{uuid.uuid4().hex[:8]}"
@@ -161,10 +191,28 @@ def main() -> int:
         wait_until_ready(container, user="relay")
         print("restoring dump...")
         restore_into(container, dump, db="relay", user="relay")
-        counts = row_counts(container, db="relay", user="relay", tables=VERIFY_TABLES)
-        print("row counts in restored scratch database:")
-        for table, count in counts.items():
-            print(f"  {table}: {count}")
+        restored = row_counts(container, db="relay", user="relay", tables=VERIFY_TABLES)
+        if not compare_live:
+            print("row counts in restored scratch database:")
+            for table, count in restored.items():
+                print(f"  {table}: {count}")
+            return 0
+
+        live = row_counts(live_container, db="relay", user="relay", tables=VERIFY_TABLES)
+        print(f"{'table':<20} {'restored':>10} {'live':>10}  drift")
+        for table, count in restored.items():
+            drift = live.get(table, 0) - count
+            print(f"  {table:<18} {count:>10} {live.get(table, 0):>10}  {drift:+}")
+        ok, problems = compare_to_live(restored, live)
+        if not ok:
+            print("\nRESTORE DOES NOT MATCH THE LIVE DATABASE:", file=sys.stderr)
+            for problem in problems:
+                print(f"  - {problem}", file=sys.stderr)
+            return 1
+        print(
+            "\nrestore verified: every table restored, and no table lost rows that existed "
+            "when the dump was taken (positive drift is writes since the dump)."
+        )
         return 0
     finally:
         if keep:

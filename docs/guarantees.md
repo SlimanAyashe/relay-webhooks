@@ -32,8 +32,11 @@ stop" -- both lists below are meant to be read together, not the "guaranteed" ha
   (or someone who has the secret) -- not from an arbitrary caller who discovered the
   endpoint URL. Verification additionally rejects any timestamp more than
   `signature_tolerance_seconds` (default 300s) away from "now" in either direction, closing
-  a captured-and-replayed-later request out of the trust window. What this does *not*
-  prove: that the request was ever actually sent to *this* endpoint specifically, or that
+  a captured-and-replayed-later request out of the trust window. That freshness check runs
+  *before* the HMAC comparison and short-circuits it, so a receiver logging only a boolean
+  cannot tell "wrong secret or altered body" from "this delivery aged out of the window" --
+  two failures with completely different causes. `verify_with_reason()` returns which check
+  rejected the request, and receivers should log it. What this does *not* prove: that the request was ever actually sent to *this* endpoint specifically, or that
   it wasn't replayed *within* the tolerance window by someone who captured it in flight --
   the tolerance window is a deliberate breadth-vs-safety tradeoff (see below), not zero.
 - **Destinations are SSRF-restricted, not merely "checked."** Every delivery attempt --
@@ -94,12 +97,14 @@ stop" -- both lists below are meant to be read together, not the "guaranteed" ha
   Prometheus**, not only inferable by querying Postgres: `circuit_breaker_state` tracks an
   endpoint's real closed/open/half-open transitions, and `delivery_attempts_total` is
   labeled by outcome (success, retry, exhausted, ssrf_blocked, timeout).
-- **A nightly database backup exists, and restoring from it has been verified to actually
-  work**, not merely scripted: `scripts/backup_postgres.py` and `scripts/restore_drill.py`
-  share one code path against any S3-compatible endpoint, and the drill -- restoring the
-  latest backup into a throwaway scratch Postgres container and comparing row counts against
-  the live database -- has been run for real, with the dated result recorded in
-  `docs/PROJECT_STATUS.md`.
+- **A nightly database backup runs on a timer that has actually fired, and restoring from
+  it has been verified against a real production dump** -- not merely scripted.
+  `scripts/backup_postgres.py` and `scripts/restore_drill.py` share one code path against any
+  S3-compatible endpoint; the systemd timer is installed on the production VPS and its
+  service has run (2026-08-23); and the drill restored *that run's own dump* into a throwaway
+  scratch Postgres container and diffed per-table row counts against the live database, which
+  matched. Dated results in `docs/runbook.md`'s drill log. What this does **not** claim is
+  off-host durability: see the matching entry under "Not guaranteed".
 
 ## Not guaranteed
 
@@ -127,7 +132,13 @@ stop" -- both lists below are meant to be read together, not the "guaranteed" ha
   network-layer egress rules described in `docs/runbook.md` are the deliberate second layer
   behind the application-layer guard, precisely because "the app's own validation code is
   the only thing standing between an attacker and the internal network" is not a claim this
-  project is willing to make. A compromised or buggy resolver, or a validated destination
+  project is willing to make. **As of the 2026-08-24 drill, that second layer does not exist
+  on the production VPS**: `scripts/verify_egress_firewall.py` opened a TCP connection from
+  inside the dispatcher container to the host's own SSH port over every Docker bridge
+  gateway, so today the app-layer guard *is* the only thing standing there. The rules that
+  would close it -- including the `INPUT`-chain half the drill showed was missing from the
+  originally documented set -- are in `docs/runbook.md`, unapplied, because this VPS is
+  shared with unrelated production services. A compromised or buggy resolver, or a validated destination
   that later 30x-redirects through a *non-HTTP* mechanism the guard doesn't see, are outside
   this guarantee's scope entirely.
 - **HMAC signing does not guarantee freshness within the tolerance window.** A captured
@@ -155,14 +166,19 @@ stop" -- both lists below are meant to be read together, not the "guaranteed" ha
   `docs/adr/0007-phase-5-observability-and-ops.md`'s tradeoff section. Not applied for the
   same reason the egress-firewall rules aren't: touching that shared Traefik config is out
   of bounds for this repo's tooling to do unilaterally.
-- **The nightly backup schedule (the systemd timer under `scripts/systemd/`) is documented
-  and ready to install, but has not been installed on the real production VPS from this
-  repo's own tooling** -- doing so needs SSH access to a specific, already-provisioned host,
-  the same category of action `docs/PROJECT_STATUS.md` and `docs/runbook.md` already treat
-  as requiring deliberate, out-of-band execution rather than something automated here. The
-  backup and restore *scripts* themselves, and the restore drill proving they work, have
-  been actually run -- see the guarantee above -- just not yet on an automated nightly timer
-  in production.
+- **The nightly backup is not stored off-host.** The timer is installed and firing, and the
+  restore has been verified against a real dump -- but this project has no AWS account, so
+  `BACKUP_S3_ENDPOINT_URL` points at a MinIO container running on the same VPS as the
+  database it backs up. That proves the timer, the dump, the upload and the restore all
+  work; it does not survive losing the host, which is most of what a backup is for. Pointing
+  it at real S3 is one line of `backup.env` and no code change (`docs/runbook.md`).
+- **A deploy is health-gated, not zero-downtime.** `scripts/deploy_remote.sh` guarantees a
+  bad image does not *stay* deployed: `/readyz` is polled for 60s and the swap is aborted
+  and rolled back if it never goes green. It does not guarantee uninterrupted service while
+  that happens -- Compose replaces the running container before the gate can ask anything,
+  and the 2026-08-24 drill measured 74 seconds of errors on the public domain before
+  automatic recovery. Blue/green would close that, at the cost of a second container and a
+  proxy cutover this single-VPS deployment has deliberately not built.
 
 ## Related reading
 
@@ -173,4 +189,9 @@ stop" -- both lists below are meant to be read together, not the "guaranteed" ha
   tradeoffs specifically, and `docs/adr/0006-phase-4-demo-console.md` for the sandbox/SSE
   tradeoffs.
 - `docs/runbook.md` -- the network-layer egress rules that back the SSRF guarantee as
-  defense in depth, plus deploy/rollback/DLQ-drain operational steps.
+  defense in depth, plus deploy/rollback/DLQ-drain operational steps and the dated log of
+  every operational drill that has actually been executed.
+- `docs/live-verification.md` -- how each guarantee above is verified against the *deployed*
+  service rather than against testcontainers, and what that deliberately doesn't cover.
+- `docs/failure-scenarios.md` -- the plan's twelve failure scenarios, each mapped to a named
+  test, audited by `tests/unit/test_failure_scenario_audit.py`.

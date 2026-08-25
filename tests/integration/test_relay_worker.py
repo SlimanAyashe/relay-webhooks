@@ -1,10 +1,12 @@
 import uuid
 
 from redis.asyncio import Redis
+from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
 from relay.infra.streams import read_deliveries
 from relay.repositories.unit_of_work import UnitOfWork
+from relay.services.events.service import EventIngestService
 from relay.workers.relay import run_once
 
 
@@ -121,3 +123,41 @@ async def test_outbox_row_committed_before_a_relay_run_is_recovered_on_the_next_
     # relay run (or a second replica) finds nothing left to do.
     second_processed = await run_once(UnitOfWork(sessionmaker), stream_redis, batch_size=10)
     assert second_processed == 0
+
+
+async def test_duplicate_ingest_fans_out_exactly_one_delivery(
+    db_engine: AsyncEngine, stream_redis: Redis
+) -> None:
+    """Testing scenario #5, all the way through the fan-out: the same Idempotency-Key with
+    an identical body must produce one event row *and* one delivery -- "one event row" alone
+    would still allow a second outbox row to double-deliver it, which is the version of this
+    bug a receiver would actually notice.
+    """
+    sessionmaker = _sessionmaker(db_engine)
+    setup = UnitOfWork(sessionmaker)
+    async with setup:
+        tenant = await setup.tenants.create(name=f"acme-{uuid.uuid4()}")
+        await setup.endpoints.create(
+            tenant_id=tenant.id,
+            url="https://example.com/webhook",
+            secret="s3cr3t",
+            subscribed_event_types=frozenset({"order.created"}),
+        )
+        await setup.commit()
+
+    service = EventIngestService(UnitOfWork(sessionmaker))
+    first = await service.ingest(tenant.id, "order.created", {"order_id": "1"}, "idem-dup")
+    second = await service.ingest(tenant.id, "order.created", {"order_id": "1"}, "idem-dup")
+    assert second.id == first.id
+
+    processed = await run_once(UnitOfWork(sessionmaker), stream_redis, batch_size=10)
+
+    assert processed == 1
+    messages = await read_deliveries(stream_redis, "test-consumer", count=10, block_ms=100)
+    assert len(messages) == 1
+    async with sessionmaker() as session:
+        delivery_count = await session.execute(
+            text("SELECT COUNT(*) FROM deliveries WHERE event_id = :event_id"),
+            {"event_id": str(first.id)},
+        )
+        assert delivery_count.scalar_one() == 1

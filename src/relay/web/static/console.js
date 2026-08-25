@@ -9,7 +9,14 @@ function relayConsole() {
     inspected: null,
     metrics: {},
     dlq: [],
-    verify: { secret: "", body: "", timestamp: "", signature: "", result: null },
+    verify: {
+      secret: "",
+      body: "",
+      timestamp: "",
+      signature: "",
+      toleranceSeconds: "",
+      outcome: null,
+    },
     loading: { sandbox: false, endpoint: false, event: false },
     errors: { sandbox: null, endpoint: null },
     _eventSource: null,
@@ -55,6 +62,31 @@ function relayConsole() {
       }
     },
 
+    // The timeline is per-tenant, so it interleaves every destination's attempts. Without
+    // this the numbers look random -- they are per-delivery attempt counts from several
+    // deliveries at once.
+    endpointLabel(endpointId) {
+      const endpoint = this.endpoints.find((ep) => ep.id === endpointId);
+      if (!endpoint) return "(removed)";
+      return endpoint.url.replace(window.location.origin, "");
+    },
+
+    async deleteEndpoint(endpoint) {
+      this.loading.endpoint = true;
+      this.errors.endpoint = null;
+      try {
+        await this._api("/v1/endpoints/" + endpoint.id, { method: "DELETE" });
+        this.endpoints = this.endpoints.filter((ep) => ep.id !== endpoint.id);
+        // Deleting an endpoint cascades to its deliveries, so anything of its already in
+        // the DLQ is gone too -- refresh rather than leave rows that no longer exist.
+        await this.loadDlq();
+      } catch (e) {
+        this.errors.endpoint = e.message;
+      } finally {
+        this.loading.endpoint = false;
+      }
+    },
+
     async registerEndpoint() {
       this.loading.endpoint = true;
       this.errors.endpoint = null;
@@ -76,7 +108,11 @@ function relayConsole() {
       }
     },
 
-    async triggerEvent(endpoint) {
+    // No endpoint argument, deliberately. An event is addressed to a *type*, and Relay
+    // fans it out to every endpoint subscribed to that type -- there is no per-endpoint
+    // send. This used to take an `endpoint` and put its id in the payload, which made the
+    // per-row button look like it targeted that row when it never did.
+    async triggerEvent() {
       this.loading.event = true;
       try {
         const idempotencyKey = crypto.randomUUID();
@@ -85,7 +121,7 @@ function relayConsole() {
           headers: { "Idempotency-Key": idempotencyKey },
           body: JSON.stringify({
             type: "demo.triggered",
-            payload: { endpoint_id: endpoint.id, at: new Date().toISOString() },
+            payload: { at: new Date().toISOString() },
           }),
         });
         this.lastTrigger = {
@@ -149,20 +185,42 @@ function relayConsole() {
     },
 
     async verifySignature() {
+      const payload = {
+        secret: this.verify.secret,
+        body: this.verify.body,
+        timestamp: Number(this.verify.timestamp),
+        signature: this.verify.signature,
+      };
+      // Only send a tolerance when the visitor typed one -- otherwise the server applies
+      // its own default, which is the number a real receiver would be running.
+      if (this.verify.toleranceSeconds !== "" && this.verify.toleranceSeconds !== null) {
+        payload.tolerance_seconds = Number(this.verify.toleranceSeconds);
+      }
       try {
         const { data } = await this._api("/v1/sandbox/verify-signature", {
           method: "POST",
-          body: JSON.stringify({
-            secret: this.verify.secret,
-            body: this.verify.body,
-            timestamp: Number(this.verify.timestamp),
-            signature: this.verify.signature,
-          }),
+          body: JSON.stringify(payload),
         });
-        this.verify.result = data.valid;
+        this.verify.outcome = data;
       } catch (e) {
-        this.verify.result = false;
+        // A transport or validation failure is not a verdict on the signature; say so
+        // rather than rendering it as "invalid" and sending someone hunting a bug in
+        // their signing code.
+        this.verify.outcome = {
+          valid: false,
+          reason: "request_failed",
+          detail: "could not reach the verifier: " + e.message,
+          skew_seconds: 0,
+        };
       }
+    },
+
+    // One click out of the trap the replay window sets for anyone verifying a delivery
+    // they captured a few minutes ago.
+    async verifyIgnoringAge() {
+      const skew = (this.verify.outcome && this.verify.outcome.skew_seconds) || 0;
+      this.verify.toleranceSeconds = skew + 60;
+      await this.verifySignature();
     },
   };
 }

@@ -44,3 +44,30 @@ jobs:
         run: |
           ssh -i ~/.ssh/deploy_key "${{ secrets.DEPLOY_USER }}@${{ secrets.DEPLOY_HOST }}" \
             "chmod +x /opt/relay/deploy_remote.sh && cd /opt/relay && ./deploy_remote.sh ghcr.io/${{ env.IMAGE_REPO }}:${{ github.sha }}"
+
+      # /readyz going green means the process can reach Postgres and Redis. It does not
+      # mean the thing on the domain still keeps its promises, so the deploy isn't done
+      # until the guarantee-pinned suite passes against the new container through the
+      # public API -- see docs/adr/0009-phase-8-live-verification.md.
+      #
+      # A failure here is handled exactly like a failed health gate: investigate, and roll
+      # back with `deploy_remote.sh <previous-sha>` on the VPS (docs/runbook.md). It is
+      # deliberately not automated -- abort-on-fail plus a documented one-liner buys nearly
+      # all the safety of auto-rollback for a fraction of the machinery.
+      - uses: astral-sh/setup-uv@v4
+        with:
+          python-version: "3.12"
+      - run: uv sync --locked
+
+      - name: Live smoke suite against the deployed API
+        env:
+          UV_LOCKED: "1"
+          # The public origin the suite drives, and the origin it registers the built-in
+          # /mock/* receivers under -- they're the same host here; both are variables so a
+          # second environment doesn't need a workflow edit.
+          RELAY_E2E_BASE_URL: ${{ vars.RELAY_PUBLIC_URL || 'https://relay.bookr.tech' }}
+          RELAY_E2E_RECEIVER_BASE_URL: ${{ vars.RELAY_PUBLIC_URL || 'https://relay.bookr.tech' }}
+        # The runner has no Docker access to the stack's containers, so the handful of
+        # checks that read container stdout or the dispatcher's own metrics port skip here
+        # and are covered by the on-demand run on the host (docs/live-verification.md).
+        run: uv run pytest tests/e2e -v --durations=10

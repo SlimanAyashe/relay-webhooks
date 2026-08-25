@@ -43,10 +43,17 @@ which test proves it" log behind those promises. [docs/runbook.md](docs/runbook.
 deploy, rollback, and DLQ replay. [RELAY-PLAN.md](../RELAY-PLAN.md) has the full build-phase plan.
 
 **Status:** Phases 0–5 (skeleton, API/domain, delivery engine, security & resilience, the
-public demo console, and observability/ops) are complete in code, and Phase 6's load-test
-harness and tooling hardening (this branch) are landing on top; see
-[docs/PROJECT_STATUS.md](docs/PROJECT_STATUS.md) for what's deployed right now versus what's
-only landed on a feature branch.
+public demo console, and observability/ops) are complete and **deployed** at
+`https://relay.bookr.tech`, with Phase 6's load-test harness and tooling hardening on top.
+Phase 8 (live verification) has since verified those guarantees *against the deployment*
+rather than only in CI; see [docs/PROJECT_STATUS.md](docs/PROJECT_STATUS.md) for the current
+state and the four things the live run found.
+
+[docs/live-verification.md](docs/live-verification.md) explains how each guarantee is checked
+against the deployed service, and [docs/failure-scenarios.md](docs/failure-scenarios.md) maps
+the plan's twelve failure scenarios to the named tests that prove them.
+[docs/runbook.md](docs/runbook.md) also carries a dated log of the operational drills that
+have actually been executed.
 
 ## Architecture notes
 
@@ -75,6 +82,19 @@ make test             # unit + integration (integration spins up its own
 make lint              # ruff check + format --check
 make typecheck          # mypy --strict src
 ```
+
+The live suites are opt-in by path, because they talk to a *running deployment* rather than to
+testcontainers — a bare `pytest` never picks them up:
+
+```bash
+RELAY_E2E_BASE_URL=https://relay.bookr.tech \
+RELAY_E2E_RECEIVER_BASE_URL=https://relay.bookr.tech make test-e2e   # guarantee-pinned smoke
+make test-chaos        # kills real containers; run it on a stack you're watching
+make verify-egress     # network-layer egress posture, from inside a worker container
+```
+
+See [docs/live-verification.md](docs/live-verification.md) for why there are two URLs and what
+each suite does and doesn't prove.
 
 Open `http://localhost:8000/docs` for the interactive OpenAPI, or `http://localhost:8080/readyz`
 to hit the same API through the local Caddy proxy.
@@ -131,25 +151,27 @@ See [docs/guarantees.md](docs/guarantees.md)'s "Not guaranteed" section and
 (no ordering, no global fairness, DNS rebinding mitigated but not eliminated, etc.). A few
 worth calling out here specifically:
 
-<<<<<<< HEAD
-=======
-- No nightly backup/restore — Phase 5 (optional) scope, not yet started.
->>>>>>> 41b5690 (docs: restructure README to open with diagram, record image size)
 - The VPS egress firewall rules documented in `docs/runbook.md` as defense-in-depth behind
   the application-layer SSRF guard have not been applied to the production VPS yet (it's
   shared with other pre-existing services, so this needs deliberate coordination, not
-  unilateral automation).
-<<<<<<< HEAD
+  unilateral automation). Phase 8 measured what that costs: a worker container can open a TCP
+  connection to the host's own SSH port, so the app-layer guard is currently the only thing
+  stopping it.
 - `GET /metrics` is unauthenticated and not restricted at the network layer in production —
   same reasoning and same "not this repo's tooling's call to make unilaterally" as the
   egress-firewall rules above.
-- The nightly-backup systemd timer (`scripts/systemd/`) is written and documented but not
-  yet installed on the production VPS — the backup/restore *scripts* have been actually run
-  and verified (see `docs/PROJECT_STATUS.md`), just not yet on an automated schedule there.
-- No Grafana dashboard, no Sentry, no k6 load-test numbers yet — explicitly nice-to-have or
-  Phase 6 scope per the project plan, not oversights.
-=======
+- The nightly-backup timer is installed and firing, and the restore has been verified against
+  a real production dump — but the backups land in a MinIO container on the *same VPS* as the
+  database, since this project has no AWS account. That is not off-host durability; pointing
+  it at real S3 is one line of config and no code change.
+- A deploy is health-gated, not zero-downtime: a bad image never stays deployed, but the drill
+  measured 74 seconds of errors on the public domain while the gate caught one and rolled
+  back. Blue/green would close that and hasn't been built.
+- After a Redis restart the connection pool keeps handing out closed connections, so a handful
+  of requests get a `500` before it drains — found by the chaos suite, documented in
+  `docs/failure-modes.md`, not yet fixed.
 - The Phase 6 load-test matrix (worker count x destinations x health profile) has reusable
   tooling (`tests/load/`) but has not yet been run end-to-end and published in
   `docs/load-test-results.md`.
->>>>>>> 41b5690 (docs: restructure README to open with diagram, record image size)
+- No Grafana dashboard and no Sentry — explicitly nice-to-have per the project plan, not
+  oversights.
