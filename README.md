@@ -37,11 +37,13 @@ phase-by-phase build log; the original project plan is kept outside this repo.
 
 **Status:** Phases 0–5 (skeleton, API/domain, delivery engine, security & resilience, the
 public demo console, and observability/ops) are complete and **deployed** at
+
 `https://relay.bookr.tech`, with Phase 6's load-test harness and tooling hardening and Phase
 7's [interview-prep notes](docs/interview-prep.md) on top. Phase 8 (live verification) has
 since verified those guarantees *against the deployment* rather than only in CI; see
 [docs/PROJECT_STATUS.md](docs/PROJECT_STATUS.md) for the current state and the four things the
 live run found.
+
 
 [docs/live-verification.md](docs/live-verification.md) explains how each guarantee is checked
 against the deployed service, and [docs/failure-scenarios.md](docs/failure-scenarios.md) maps
