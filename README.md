@@ -14,23 +14,15 @@
 **[Demo GIF placeholder -- see `docs/assets/demo.gif` note in the source of this file. Not
 recorded yet.]**
 
-```mermaid
-flowchart LR
-    C[Client] -->|POST /v1/events<br/>Idempotency-Key| API[FastAPI]
-    API -->|single TX| PG[(PostgreSQL)]
-    PG -.->|events + outbox<br/>same transaction| PG
-    PG -->|SELECT ... FOR UPDATE<br/>SKIP LOCKED| RELAY[Relay / Dispatcher]
-    RELAY -->|XADD| RS[Redis Streams]
-    RS -->|consumer group<br/>XREADGROUP / XAUTOCLAIM| W[Async Worker Pool]
-    W --> SSRF{SSRF Guard<br/>DNS resolve + CIDR deny}
-    SSRF -->|blocked| DLQ[(Dead Letter)]
-    SSRF -->|allowed| DEST[Customer Endpoint]
-    DEST -->|2xx| DONE[Delivered]
-    DEST -->|non-2xx / timeout| ZS[(Redis ZSET<br/>next_retry_at)]
-    ZS -->|scheduler tick| RS
-    W -->|attempt row| PG
-    W -->|publish| PS[Redis Pub/Sub] --> SSE[SSE -> Demo Console]
-```
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/assets/architecture-dark.svg">
+  <img alt="Relay architecture: a tenant POSTs an event to the FastAPI ingest, which commits the event row and an outbox row in one PostgreSQL transaction; relay-worker fans that outbox row out onto a Redis stream, dispatchers sign and send each delivery through an SSRF guard to the customer endpoint, and a retry sorted set, scheduler, and reaper carry failed or orphaned work back onto the same stream." src="docs/assets/architecture-light.svg">
+</picture>
+
+<!--
+  Regenerate both SVGs with:  python3 scripts/gen_architecture_diagram.py
+  Edit the layout tables in that script rather than the SVGs by hand.
+-->
 
 A webhook delivery service: tenants register HTTPS endpoints, subscribe to event types, and POST
 events; Relay durably fans them out with at-least-once delivery, HMAC signing, jittered retry
@@ -40,14 +32,18 @@ backoff, per-endpoint circuit breakers, and a replayable dead-letter queue.
 where each promise stops -- and is the highest-signal page in this repo if you only read one.
 [docs/failure-modes.md](docs/failure-modes.md) is the running "if it dies here, then what, and
 which test proves it" log behind those promises. [docs/runbook.md](docs/runbook.md) covers
-deploy, rollback, and DLQ replay. [RELAY-PLAN.md](../RELAY-PLAN.md) has the full build-phase plan.
+deploy, rollback, and DLQ replay. [docs/PROJECT_STATUS.md](docs/PROJECT_STATUS.md) has the
+phase-by-phase build log; the original project plan is kept outside this repo.
 
 **Status:** Phases 0–5 (skeleton, API/domain, delivery engine, security & resilience, the
 public demo console, and observability/ops) are complete and **deployed** at
-`https://relay.bookr.tech`, with Phase 6's load-test harness and tooling hardening on top.
-Phase 8 (live verification) has since verified those guarantees *against the deployment*
-rather than only in CI; see [docs/PROJECT_STATUS.md](docs/PROJECT_STATUS.md) for the current
-state and the four things the live run found.
+
+`https://relay.bookr.tech`, with Phase 6's load-test harness and tooling hardening and Phase
+7's [interview-prep notes](docs/interview-prep.md) on top. Phase 8 (live verification) has
+since verified those guarantees *against the deployment* rather than only in CI; see
+[docs/PROJECT_STATUS.md](docs/PROJECT_STATUS.md) for the current state and the four things the
+live run found.
+
 
 [docs/live-verification.md](docs/live-verification.md) explains how each guarantee is checked
 against the deployed service, and [docs/failure-scenarios.md](docs/failure-scenarios.md) maps
@@ -75,7 +71,8 @@ other services on that box) via Docker labels on the `api` container — see
 ```bash
 uv sync              # install deps into .venv
 cp .env.example .env # see below for what each var does
-make up               # docker compose: postgres, redis, api, caddy
+make up               # docker compose: postgres, redis, minio, caddy, api, and the four
+                       # worker processes (relay-worker, dispatcher, scheduler, reaper)
 make migrate          # alembic upgrade head
 make test             # unit + integration (integration spins up its own
                        # throwaway Postgres/Redis via testcontainers)
@@ -141,15 +138,14 @@ root filesystem, and pins its base image by digest.
 docker build -f docker/Dockerfile -t relay:latest .
 ```
 
-Final runtime image size: **320MB** (`python:3.12-slim` base), measured via `docker images`
+Final runtime image size: **376MB** (`python:3.12-slim` base), measured via `docker images`
 after a clean `make build`.
 
 ## Known limitations
 
-See [docs/guarantees.md](docs/guarantees.md)'s "Not guaranteed" section and
-[RELAY-PLAN.md](../RELAY-PLAN.md)'s scope-discipline notes for the full, honest list
-(no ordering, no global fairness, DNS rebinding mitigated but not eliminated, etc.). A few
-worth calling out here specifically:
+See [docs/guarantees.md](docs/guarantees.md)'s "Not guaranteed" section for the full, honest
+list (no ordering, no global fairness, DNS rebinding mitigated but not eliminated, etc.). A
+few worth calling out here specifically:
 
 - The VPS egress firewall rules documented in `docs/runbook.md` as defense-in-depth behind
   the application-layer SSRF guard have not been applied to the production VPS yet (it's
